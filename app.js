@@ -12,6 +12,23 @@ document.addEventListener('DOMContentLoaded', () => {
     const startDateInput = document.getElementById('start-date-input');
     const endDateInput = document.getElementById('end-date-input');
     const statusMessage = document.getElementById('status-message');
+
+    // Set default values for inputs
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0'); // Months are 0-indexed
+    const dd = String(today.getDate()).padStart(2, '0');
+    endDateInput.value = `${yyyy}-${mm}-${dd}`;
+
+    const lastStockCode = localStorage.getItem('lastStockCode');
+    const lastStartDate = localStorage.getItem('lastStartDate');
+
+    if (lastStockCode) {
+        stockCodeInput.value = lastStockCode;
+    }
+    if (lastStartDate) {
+        startDateInput.value = lastStartDate;
+    }
     
     const chartContainer = document.getElementById('chart-container');
     const klineChartContainer = document.getElementById('kline-chart-container');
@@ -130,6 +147,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 showStatus(`成功加载 ${dataToRender.length} 条数据进行图表渲染。`, 'success');
                 renderCharts(dataToRender, stockCode, stockName);
                 document.getElementById('chart-tabs').style.display = 'flex';
+
+                // Save last successful query parameters
+                localStorage.setItem('lastStockCode', stockCode);
+                localStorage.setItem('lastStartDate', startDateInput.value);
             }
         } catch (error) {
             showStatus(`查询或获取数据时发生错误: ${error.message}`, 'danger');
@@ -225,7 +246,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const option = {
             tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-            legend: { data: ['日振幅(%)', '周振幅(%)', '成交量'], top: 0, inactiveColor: '#777' },
+            legend: { data: ['日振幅(%)', '周振幅(%)'], top: 0, inactiveColor: '#777' },
             grid: [
                 { left: '10%', right: '8%', top: '10%', height: '50%' },
                 { left: '10%', right: '8%', top: '65%', height: '15%' }
@@ -274,22 +295,35 @@ document.addEventListener('DOMContentLoaded', () => {
         const calculateMA = (dayCount, data) => {
             let result = [];
             for (let i = 0, len = data.length; i < len; i++) {
-                if (i < dayCount) {
+                if (i < dayCount - 1) {
                     result.push('-');
                     continue;
                 }
                 let sum = 0;
                 for (let j = 0; j < dayCount; j++) {
-                    sum += data[i - j].close;
+                    sum += parseFloat(data[i - j].close);
                 }
                 result.push((sum / dayCount).toFixed(2));
             }
             return result;
         };
 
+        const allMaDays = [5, 20, 240];
+        const availableMaDays = allMaDays.filter(day => rawData.length >= day);
+        
+        const legendData = [...availableMaDays.map(day => `MA${day}`)];
+        
+        const maSeries = availableMaDays.map(day => ({
+            name: `MA${day}`,
+            type: 'line',
+            data: calculateMA(day, rawData),
+            smooth: true,
+            lineStyle: { opacity: 0.5 }
+        }));
+
         const option = {
             tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-            legend: { data: ['K线', 'MA5', 'MA10', 'MA20', 'MA30', '成交量'], top: 0, inactiveColor: '#777' },
+            legend: { data: legendData, top: 0, inactiveColor: '#777' },
             grid: [
                 { left: '10%', right: '8%', top: '10%', height: '50%' },
                 { left: '10%', right: '8%', top: '65%', height: '15%' }
@@ -309,13 +343,7 @@ document.addEventListener('DOMContentLoaded', () => {
             series: [
                 { name: 'K线', type: 'candlestick', data: klineData, itemStyle: { color: '#ef232a', color0: '#14b143', borderColor: '#ef232a', borderColor0: '#14b143' } },
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
-                ...['5', '10', '20', '30'].map(day => ({
-                    name: `MA${day}`,
-                    type: 'line',
-                    data: calculateMA(day, rawData),
-                    smooth: true,
-                    lineStyle: { opacity: 0.5 }
-                }))
+                ...maSeries
             ]
         };
 

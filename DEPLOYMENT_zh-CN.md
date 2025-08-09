@@ -1,130 +1,63 @@
-# Ubuntu 24 VPS 部署指南
+# 部署与架构说明
 
-本指南提供在运行 Ubuntu 24 的服务器上部署“股票/ETF振幅查看器”应用的详细步骤。
+本文件旨在说明“股票/ETF振幅查看器”的设计理念、架构，以及为什么它需要一个本地服务器来运行。
 
-## 1. 本地项目准备 (先决条件)
+## 核心问题：浏览器的同源策略
 
-在部署之前，您的项目应使用 Git 进行版本控制。
+现代网络浏览器有一个非常重要的安全机制，叫做 **“同源策略” (Same-Origin Policy)**。该策略规定，一个网页的脚本（例如，我们应用中的 `app.js`）只能请求来自同一“源”（协议、域名、端口号三者完全相同）的资源。
 
-### 1.1. 创建 `.gitignore` 文件
+我们的前端页面 `app.html` 是通过 `file:///` 协议从您的本地文件系统加载的。而它需要获取的数据，例如来自新浪财经的股票数据，则位于 `https://finance.sina.com.cn` 这样的网络地址上。
 
-在项目根目录中创建一个名为 `.gitignore` 的文件，以防止不必要的文件（如 `node_modules`）被上传。文件内容如下：
+对于浏览器来说，`file:///` 和 `https://finance.sina.com.cn` 是两个完全不同的源。因此，浏览器会出于安全考虑，阻止 `app.html` 中的脚本直接向新浪财经的服务器发送网络请求。这个限制被称为 **“跨域资源共享” (Cross-Origin Resource Sharing, CORS)** 问题。
+
+## 解决方案：本地服务器作为代理
+
+为了解决CORS问题，我们采用了一个经典的解决方案：**引入一个本地后端服务器作为中间代理**。
+
+### 架构图
 
 ```
-# 依赖项
-/node_modules
-
-# 其他
-.DS_Store
-desktop.ini
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
++-----------------+      /       +------------------------+
+|   您的浏览器     |     /         |    新浪财经等远程服务器   |
+| (运行 app.html) |    /          | (https://finance...)   |
++-----------------+   /            +------------------------+
+        |            /|\                      |
+        |             | (此路不通, 被CORS阻止) |
+        |            \|/                      |
+        |                                     |
+        | 1. 向本地服务器发起请求             | 2. 本地服务器转发请求
+        +------------------------------------>+
+                                              |
++-----------------+      3. 返回数据给本地服务器      +------------------------+
+|   本地Node.js服务器 |<------------------------------------+    (服务器之间无CORS限制)    |
+| (localhost:3000)  |                                     |
++-----------------+      4. 返回数据给浏览器              |
+        ^                                     |
+        |                                     |
+        +-------------------------------------+
 ```
 
-### 1.2. 发布到 GitHub
+### 工作流程
 
-1.  **初始化 Git**：如果您尚未初始化仓库，请在项目目录中打开终端并运行：
-    ```bash
-    git init
-    git add .
-    git commit -m "Initial commit"
-    ```
-2.  **发布代码**：在 GitHub 上创建一个新的仓库，并将您的本地代码推送到该仓库。
-    ```bash
-    git remote add origin <你的GitHub仓库URL>
-    git branch -M main
-    git push -u origin main
-    ```
-    *提示：Visual Studio Code 提供了“发布到 GitHub”的功能，可以自动完成此过程。*
+1.  **前端请求**: 当您在浏览器中点击“查询”时，前端的 JavaScript (`app.js`) 不再直接请求新浪财经。相反，它向我们自己的本地服务器 `http://localhost:3000/api/kline` 发送一个请求。
+2.  **后端转发**: 本地服务器 (`server.js`) 接收到这个请求。由于服务器端的程序（如 Node.js）不受浏览器同源策略的限制，它可以自由地向任何外部API（如新浪财经）发送网络请求。
+3.  **获取数据**: 本地服务器成功从新浪财经获取到股票数据。
+4.  **返回数据**: 本地服务器将获取到的数据再回传给前端页面。因为前端页面和本地服务器同在 `localhost` 上（可以被视为同源），浏览器允许这次数据交换。
 
-## 2. 服务器设置与配置
+通过这种方式，本地服务器就像一个桥梁，优雅地绕过了浏览器的CORS限制，使得前端页面可以顺利地获取并展示外部数据。
 
-通过 SSH 连接到您的 VPS，并设置所需的环境。
+## 组件角色
 
-### 2.1. 连接与更新
-```bash
-# 连接到您的服务器
-ssh your_username@your_vps_ip
+-   **`app.html`, `app.js`, `style.css` (前端)**
+    -   **角色**: 用户界面 (UI)
+    -   **职责**: 提供交互界面，接收用户输入（股票代码、日期），使用 ECharts 渲染K线图和振幅图，并将所有数据请求发送到本地后端。
 
-# 更新系统软件包
-sudo apt update && sudo apt upgrade -y
-```
+-   **`server.js` (后端)**
+    -   **角色**: 数据代理 (Proxy)
+    -   **职责**: 监听来自前端的API请求，调用 `axios` 或 `node-fetch` 等库向真实的外部数据源（新浪财经）发起HTTP请求，处理返回的数据（包括解决可能的字符编码问题，如 `gbk` 转 `utf-8`），最后将干净的 JSON 数据返回给前端。
 
-### 2.2. 安装 Git
-```bash
-sudo apt install git -y
-```
+-   **`package.json`**
+    -   **角色**: 项目清单
+    -   **职责**: 定义项目信息、依赖库 (如 `express`, `axios`) 以及快捷命令 (如 `npm start`)。
 
-### 2.3. 通过 nvm 安装 Node.js 和 npm
-推荐使用 nvm (Node Version Manager)，它可以避免权限问题，并轻松管理 Node.js 版本。
-
-```bash
-# 下载并运行 nvm 安装脚本
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-
-# 使 nvm 命令在当前 shell 中生效
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-
-# 安装最新的长期支持 (LTS) 版本的 Node.js
-nvm install --lts
-```
-
-## 3. 部署代码
-
-将代码仓库克隆到您的服务器上，并安装依赖项。
-
-```bash
-# 为您的应用创建一个目录
-mkdir ~/app && cd ~/app
-
-# 从 GitHub 克隆您的仓库
-git clone <你的GitHub仓库URL> .
-
-# 安装项目依赖
-npm install
-```
-
-## 4. 使用 PM2 运行应用
-
-PM2 是一个进程管理器，可以使您的应用在后台持续运行，并在崩溃时自动重启。
-
-```bash
-# 全局安装 PM2
-npm install pm2 -g
-
-# 使用 PM2 启动服务器
-pm2 start server.js --name "stock-app"
-
-# 设置 PM2 开机自启
-pm2 startup
-
-# 根据屏幕提示操作，它会要求您运行一行类似下面的命令：
-# sudo env PATH=$PATH:/home/user/.nvm/versions/node/vXX.X.X/bin pm2 startup ...
-
-# 保存当前进程列表，以便重启后恢复
-pm2 save
-```
-
-## 5. 配置防火墙
-
-允许外部流量访问您的应用程序端口。
-
-```bash
-# 允许 SSH 连接 (非常重要！)
-sudo ufw allow ssh
-
-# 允许外部访问应用的端口 (3000)
-sudo ufw allow 3000/tcp
-
-# 启用防火墙
-sudo ufw enable
-```
-
-## 6. 访问您的应用
-
-现在，您可以在浏览器中通过服务器的 IP 地址访问您的应用了：
-
-**`http://your_vps_ip:3000/app.html`**
+希望这份文档能帮助您更好地理解本工具的工作原理。

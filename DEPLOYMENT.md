@@ -1,130 +1,63 @@
-# Ubuntu 24 VPS Deployment Guide
+# Deployment and Architecture Explanation
 
-This guide provides step-by-step instructions to deploy the Stock Volatility Viewer application on a server running Ubuntu 24.
+This document explains the design philosophy, architecture of the "Stock/ETF Volatility Viewer," and why it requires a local server to run.
 
-## 1. Local Project Preparation (Prerequisites)
+## The Core Problem: Browser's Same-Origin Policy
 
-Before deploying, your project should be under version control with Git.
+Modern web browsers enforce a critical security mechanism known as the **Same-Origin Policy**. This policy dictates that a script from one origin (e.g., our application's `app.js`) can only request resources from the same "origin" (defined by the combination of protocol, domain, and port).
 
-### 1.1. Create a `.gitignore` file
+Our frontend page, `app.html`, is loaded from your local filesystem via the `file:///` protocol. However, the data it needs to fetch, such as stock data from Sina Finance, resides at a web address like `https://finance.sina.com.cn`.
 
-Create a file named `.gitignore` in the project root with the following content to prevent unnecessary files from being uploaded:
+To a browser, `file:///` and `https://finance.sina.com.cn` are two completely different origins. Therefore, for security reasons, the browser blocks scripts in `app.html` from directly making network requests to Sina Finance's servers. This restriction is known as a **Cross-Origin Resource Sharing (CORS)** issue.
+
+## The Solution: A Local Server as a Proxy
+
+To solve the CORS problem, we use a classic solution: **introducing a local backend server to act as an intermediary proxy**.
+
+### Architecture Diagram
 
 ```
-# Dependencies
-/node_modules
-
-# Misc
-.DS_Store
-desktop.ini
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
++-----------------+      /       +------------------------+
+|   Your Browser  |     /         |   Remote API Server    |
+|  (running app.html) |    /          | (e.g., Sina Finance)   |
++-----------------+   /            +------------------------+
+        |            /|\                      |
+        |             | (Blocked by CORS)      |
+        |            \|/                      |
+        |                                     |
+        | 1. Request to Local Server          | 2. Server forwards request
+        +------------------------------------>+
+                                              |
++-----------------+      3. API returns data to server    +------------------------+
+| Local Node.js Server |<------------------------------------+ (No CORS for servers)      |
+| (localhost:3000)  |                                     |
++-----------------+      4. Server returns data to browser  |
+        ^                                     |
+        |                                     |
+        +-------------------------------------+
 ```
 
-### 1.2. Publish to GitHub
+### Workflow
 
-1.  **Initialize Git**: If you haven't already, open a terminal in your project directory and run:
-    ```bash
-    git init
-    git add .
-    git commit -m "Initial commit"
-    ```
-2.  **Publish**: Create a new repository on GitHub and push your local code to it.
-    ```bash
-    git remote add origin <your-github-repo-url>
-    git branch -M main
-    git push -u origin main
-    ```
-    *Tip: Visual Studio Code provides a simple "Publish to GitHub" feature that automates this process.*
+1.  **Frontend Request**: When you click "Query" in the browser, the frontend JavaScript (`app.js`) no longer requests data directly from Sina Finance. Instead, it sends a request to our own local server at `http://localhost:3000/api/kline`.
+2.  **Backend Forwarding**: The local server (`server.js`) receives this request. Since server-side programs (like Node.js) are not bound by the browser's Same-Origin Policy, they can freely make network requests to any external API (like Sina Finance).
+3.  **Data Fetching**: The local server successfully fetches the stock data from Sina Finance.
+4.  **Data Return**: The local server then sends the retrieved data back to the frontend page. Because the frontend and the local server are both on `localhost` (which can be considered the same origin), the browser permits this data exchange.
 
-## 2. Server Setup & Configuration
+In this way, the local server acts as a bridge, elegantly bypassing the browser's CORS restrictions and allowing the frontend to successfully fetch and display external data.
 
-Connect to your VPS via SSH and set up the necessary environment.
+## Component Roles
 
-### 2.1. Connect and Update
-```bash
-# Connect to your server
-ssh your_username@your_vps_ip
+-   **`app.html`, `app.js`, `style.css` (Frontend)**
+    -   **Role**: User Interface (UI)
+    -   **Responsibilities**: Provide the interactive interface, receive user input (stock codes, dates), render Candlestick and Amplitude charts using ECharts, and send all data requests to the local backend.
 
-# Update system packages
-sudo apt update && sudo apt upgrade -y
-```
+-   **`server.js` (Backend)**
+    -   **Role**: Data Proxy
+    -   **Responsibilities**: Listen for API requests from the frontend, use libraries like `axios` or `node-fetch` to make HTTP requests to the actual external data source (Sina Finance), process the response (including handling character encoding issues, e.g., converting `gbk` to `utf-8`), and finally, return clean JSON data to the frontend.
 
-### 2.2. Install Git
-```bash
-sudo apt install git -y
-```
+-   **`package.json`**
+    -   **Role**: Project Manifest
+    -   **Responsibilities**: Defines project information, lists dependencies (like `express`, `axios`), and configures shortcut commands (like `npm start`).
 
-### 2.3. Install Node.js and npm via nvm
-Using nvm (Node Version Manager) is recommended as it avoids permission issues.
-
-```bash
-# Download and run the nvm installation script
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-
-# Source the shell configuration to enable nvm
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
-
-# Install the latest Long-Term Support (LTS) version of Node.js
-nvm install --lts
-```
-
-## 3. Deploy the Code
-
-Clone the repository onto your server and install dependencies.
-
-```bash
-# Create a directory for your app
-mkdir ~/app && cd ~/app
-
-# Clone your repository from GitHub
-git clone <your-github-repo-url> .
-
-# Install project dependencies
-npm install
-```
-
-## 4. Run the Application with PM2
-
-PM2 is a process manager that will keep your application running in the background and restart it automatically if it crashes.
-
-```bash
-# Install PM2 globally
-npm install pm2 -g
-
-# Start the server using PM2
-pm2 start server.js --name "stock-app"
-
-# Set PM2 to start automatically on system boot
-pm2 startup
-
-# Follow the on-screen instructions, which will ask you to run a command like:
-# sudo env PATH=$PATH:/home/user/.nvm/versions/node/vXX.X.X/bin pm2 startup ...
-
-# Save the current process list for reboot
-pm2 save
-```
-
-## 5. Configure the Firewall
-
-Allow external traffic to access your application's port.
-
-```bash
-# Allow SSH connections (crucial!)
-sudo ufw allow ssh
-
-# Allow traffic to your app's port (3000)
-sudo ufw allow 3000/tcp
-
-# Enable the firewall
-sudo ufw enable
-```
-
-## 6. Access Your Application
-
-You can now access your application in a web browser using your server's IP address:
-
-**`http://your_vps_ip:3000/app.html`**
+We hope this document helps you better understand how this tool works.
