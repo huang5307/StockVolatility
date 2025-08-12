@@ -40,6 +40,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const averageAmplitudeContainer = document.getElementById('average-amplitude-container');
     const klineTitleContainer = document.getElementById('kline-title-container');
 
+    const stockCodeList = document.getElementById('stock-code-list');
+
     // --- Utility Functions ---
     const showStatus = (message, type = 'info') => {
         statusMessage.innerHTML = message;
@@ -50,12 +52,30 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Search History Functions ---
     const loadSearchHistory = () => {
         const history = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY)) || [];
-        const dataList = document.getElementById('stock-code-list');
-        dataList.innerHTML = ''; // Clear existing options
+        stockCodeList.innerHTML = ''; // Clear existing items
+        
+        if (history.length === 0) {
+            const li = document.createElement('li');
+            li.innerHTML = `<span class="dropdown-item-text">无历史记录</span>`;
+            stockCodeList.appendChild(li);
+            return;
+        }
+
         history.forEach(item => {
-            const option = document.createElement('option');
-            option.value = `${item.code} - ${item.name}`;
-            dataList.appendChild(option);
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.className = 'dropdown-item';
+            a.href = '#';
+            a.textContent = `${item.name} (${item.code})`;
+            a.dataset.code = item.code;
+            a.addEventListener('click', (e) => {
+                e.preventDefault();
+                stockCodeInput.value = a.dataset.code;
+                // Optionally, trigger the query directly
+                queryForm.dispatchEvent(new Event('submit', { cancelable: true }));
+            });
+            li.appendChild(a);
+            stockCodeList.appendChild(li);
         });
     };
 

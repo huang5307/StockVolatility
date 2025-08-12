@@ -20,10 +20,13 @@
                 <form id="query-form" class="row g-3 align-items-end">
                     <div class="col-md-4">
                         <label for="stock-code-input" class="form-label">股票/ETF代码</label>
-                        <input type="text" class="form-control" id="stock-code-input" list="stock-code-list" required placeholder="例如: 512170, 2330, 00878">
-                        <datalist id="stock-code-list">
-                            
-                        </datalist>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="stock-code-input" required placeholder="选择或输入代码">
+                            <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false"></button>
+                            <ul class="dropdown-menu dropdown-menu-end" id="stock-code-list">
+                                <!-- Dropdown items will be populated by JS -->
+                            </ul>
+                        </div>
                     </div>
                     <div class="col-md-3">
                         <label for="start-date-input" class="form-label">开始日期</label>
