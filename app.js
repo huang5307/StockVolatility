@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const DB_VERSION = 5;
     const KLINE_STORE_NAME = 'kline_data';
     const NAME_STORE_NAME = 'stock_names';
+    const SEARCH_HISTORY_KEY = 'stockSearchHistory';
     let db;
 
     // --- DOM Elements ---
@@ -44,6 +45,33 @@ document.addEventListener('DOMContentLoaded', () => {
         statusMessage.innerHTML = message;
         statusMessage.className = `alert alert-${type} mt-3`;
         statusMessage.style.display = 'block';
+    };
+
+    // --- Search History Functions ---
+    const loadSearchHistory = () => {
+        const history = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY)) || [];
+        const dataList = document.getElementById('stock-code-list');
+        dataList.innerHTML = ''; // Clear existing options
+        history.forEach(item => {
+            const option = document.createElement('option');
+            option.value = `${item.code} - ${item.name}`;
+            dataList.appendChild(option);
+        });
+    };
+
+    const updateSearchHistory = (code, name) => {
+        let history = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY)) || [];
+        // Remove existing entry if it's there
+        history = history.filter(item => item.code !== code);
+        // Add new entry to the front
+        history.unshift({ code, name });
+        // Keep only the last 10 entries
+        if (history.length > 10) {
+            history = history.slice(0, 10);
+        }
+        localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(history));
+        // Reload the datalist to show the new history
+        loadSearchHistory();
     };
 
     // --- Database Functions ---
@@ -109,7 +137,8 @@ document.addEventListener('DOMContentLoaded', () => {
         klineChart.showLoading();
         [analysisTitleContainer, averageAmplitudeContainer, klineTitleContainer].forEach(c => c.style.display = 'none');
 
-        const stockCode = stockCodeInput.value.trim();
+        const stockCodeWithPossibleName = stockCodeInput.value.trim();
+        const stockCode = stockCodeWithPossibleName.split(' ')[0];
         const startDate = startDateInput.value || '0000-01-01';
         const endDate = endDateInput.value || '9999-12-31';
 
@@ -132,12 +161,19 @@ document.addEventListener('DOMContentLoaded', () => {
             let dataToRender = await queryDB(stockCode, startDate, endDate);
             let stockName = await getStockName(stockCode);
 
+            if (dataToRender.length > 0 && stockName !== stockCode) {
+                updateSearchHistory(stockCode, stockName);
+            }
+
             if (dataToRender.length === 0) {
                 showStatus(`本地无 ${stockCode} 数据，正在从网络获取...`, 'info');
                 const serverResponse = await fetchDataFromLocalServer(stockCode);
                 await saveData(serverResponse.kline, stockCode, serverResponse.name);
                 stockName = serverResponse.name;
                 dataToRender = await queryDB(stockCode, startDate, endDate);
+                if (stockName && stockName !== stockCode) {
+                    updateSearchHistory(stockCode, stockName);
+                }
             }
 
             if (dataToRender.length === 0) {
@@ -149,7 +185,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('chart-tabs').style.display = 'flex';
 
                 // Save last successful query parameters
-                localStorage.setItem('lastStockCode', stockCode);
+                localStorage.setItem('lastStockCode', `${stockCode} - ${stockName}`);
                 localStorage.setItem('lastStartDate', startDateInput.value);
             }
         } catch (error) {
@@ -308,7 +344,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return result;
         };
 
-        const allMaDays = [5, 20, 240];
+                const allMaDays = [5, 20, 60, 240];
         const availableMaDays = allMaDays.filter(day => rawData.length >= day);
         
         const legendData = [...availableMaDays.map(day => `MA${day}`)];
@@ -371,6 +407,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     initDB().then(() => {
+        loadSearchHistory();
         queryForm.addEventListener('submit', handleQuery);
         showStatus("系统准备就绪。请输入股票代码查询。", "success");
     }).catch(err => {
