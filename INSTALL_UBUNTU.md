@@ -1,82 +1,87 @@
-# Stock Volatility Viewer - Ubuntu Installation Guide
+# Deploying on Ubuntu 22.04 LTS
 
-This guide will walk you through setting up and running the Stock/ETF Volatility Viewer on Ubuntu (or other Debian-based Linux distributions).
+This guide will walk you through deploying and running this project on an Ubuntu 22.04 LTS server.
 
-## Overview
+## Prerequisites
 
-This tool consists of two main parts:
-1.  **Frontend**: The interface you see in your browser (`app.html`), which uses the ECharts.js library to render charts.
-2.  **Backend**: A local Node.js server (`server.js`) responsible for fetching data from sources like Sina Finance. It securely delivers this data to the frontend, bypassing browser Cross-Origin Resource Sharing (CORS) issues.
+- A server running Ubuntu 22.04 LTS.
+- root or sudo privileges.
+- Node.js is installed (v12.x or higher is recommended). You can check the version with the `node -v` command.
 
-To use this tool, you need to run both the frontend and backend simultaneously.
+## Deployment Steps
 
-## Installation Steps
+Please execute the following commands step by step.
 
-### 1. Install Node.js
+### 1. Clone the Project from GitHub
 
-The backend server requires the Node.js environment to run. On Linux, we recommend using `nvm` (Node Version Manager) to install Node.js, as it avoids permission issues and makes it easy to manage multiple versions.
+First, you need to download the project files from the GitHub repository to your server.
 
-- **Install nvm**: Open a terminal and run the following command to download and install nvm:
-  ```shell
-  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-  ```
-  After the installation, you'll need to close and reopen your terminal or run `source ~/.bashrc` (or `~/.zshrc`, depending on your shell) for the `nvm` command to become available.
+```sh
+git clone https://github.com/huang5307/StockVolatility.git
+```
 
-- **Install Node.js with nvm**: In the terminal, run the following command to install the latest LTS (Long-Term Support) version:
-  ```shell
-  nvm install --lts
-  nvm use --lts
-  ```
+### 2. Navigate to the Project Directory
 
-- **Verify**: After installation, enter the following commands to verify:
-  ```shell
-  node -v
-  npm -v
-  ```
-  If you see version numbers (e.g., `v20.11.0`), the installation was successful.
+After the download is complete, use the `cd` command to enter the project folder.
 
-### 2. Download the Project Files
-
-- **Using Git**: Open a terminal in your desired project folder and run:
-  ```shell
-  git clone https://github.com/your-username/your-repo-name.git
-  cd your-repo-name
-  ```
-  *(Please replace `your-username/your-repo-name` with the actual repository URL)*
+```sh
+cd StockVolatility
+```
 
 ### 3. Install Project Dependencies
 
-The project relies on third-party libraries, which you need to install using `npm`.
+The project depends on `express` and `axios`. You need to install them using npm.
 
-- **Run Installation Command**:
-  In the terminal, from the project directory, run the following command and wait for it to complete.
-  ```shell
-  npm install
-  ```
-  A `node_modules` folder will be created.
+```sh
+npm install
+```
 
-### 4. Run the Backend Server
+### 4. Start the Backend Service
 
-- **Start the Server**: In the same terminal, run the following command to start the backend server:
-  ```shell
-  npm start
-  ```
-- **Keep it Running**: You will see a message like `Server is running on http://localhost:3000`. You can leave this terminal window open to keep the server running.
+Once the dependencies are installed, you can start the Node.js backend service. To ensure the service continues to run after you close the terminal, we strongly recommend using `pm2`, a process manager that can act as a daemon and automatically restart your application on server reboots.
 
-- **(Optional) Run in Background**: If you want the server to run in the background without tying up a terminal, you can use `&`:
-  ```shell
-  npm start &
-  ```
-  The server will now run in the background. To stop it, you can bring it to the foreground with the `fg` command and press `Ctrl + C`, or use the `kill` command.
+**a. Install pm2**
+If `pm2` is not installed on your server, first install it globally with the following command:
+```sh
+npm install pm2 -g
+```
 
-### 5. Open the Frontend Page
+**b. Start the Service with pm2**
+Then, use `pm2` to start `server.js`:
+```sh
+pm2 start server.js --name StockVolatility
+```
+This command will start your service in the background and name it "StockVolatility". You can check the status of your services with `pm2 list`.
 
-- **Open in Browser**: In the project folder, find the `app.html` file. You can double-click it in your file manager or run the following in the terminal:
-  ```shell
-  # xdg-open is a generic command to open files with the default application
-  xdg-open app.html
-  ```
-- **Start Using**: Once the page loads, you can enter a stock or ETF code, select a date range, and click "Query" to view the charts.
+**c. Set up Startup on Reboot**
+To have the service automatically start when the server reboots, execute the following command:
+```sh
+pm2 startup
+```
+It will generate a command (similar to `sudo env PATH=...`). You need to copy and execute that generated command to complete the startup setup.
+
+### 5. Configure the Firewall
+
+To allow external users to access your application, you need to ensure that your server's firewall (e.g., ufw) allows access to port 3000.
+
+```sh
+ufw allow 3000/tcp
+```
+
+### 6. Access Your Application
+
+Deployment is complete! You can now access your application from any browser at:
+
+`http://<Your_Server_Public_IP>:3000/app.html`
+
+Please replace `<Your_Server_Public_IP>` with the actual public IP address of your server.
 
 ---
-The application is now ready to use. Enjoy!
+
+### Alternative (without using pm2)
+
+If you prefer not to install `pm2`, you can use the `nohup` command to run the service in the background. However, this method is simpler and does not provide automatic restarts on server reboot.
+
+```sh
+nohup node server.js &
+```
