@@ -130,7 +130,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // --- Core Logic ---
     async function fetchDataFromLocalServer(code) {
-        const url = `http://localhost:3000/api/kline?symbol=${code}`;
+        const url = `/api/kline?symbol=${code}`;
         const response = await fetch(url);
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: `HTTP error! status: ${response.status}` }));
