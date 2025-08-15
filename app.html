@@ -9,7 +9,7 @@
 </head>
 <body>
     <div class="container">
-        <h1 class="text-center mb-4">股价振幅与K线分析</h1>
+        <h1 class="text-center mb-4">股票/ETF K线与振幅分析</h1>
 
         <div class="card">
             <div class="card-header">
@@ -47,20 +47,20 @@
 
         <ul class="nav nav-tabs mt-4" id="chart-tabs" role="tablist" style="display: none;">
             <li class="nav-item" role="presentation">
-                <button class="nav-link active" id="analysis-tab" data-bs-toggle="tab" data-bs-target="#analysis-panel" type="button" role="tab">振幅分析</button>
+                <button class="nav-link active" id="kline-tab" data-bs-toggle="tab" data-bs-target="#kline-panel" type="button" role="tab">K线图</button>
             </li>
             <li class="nav-item" role="presentation">
-                <button class="nav-link" id="kline-tab" data-bs-toggle="tab" data-bs-target="#kline-panel" type="button" role="tab">K线图</button>
+                <button class="nav-link" id="analysis-tab" data-bs-toggle="tab" data-bs-target="#analysis-panel" type="button" role="tab">振幅分析</button>
             </li>
         </ul>
 
         <div class="tab-content" id="chart-tab-content">
-            <div class="tab-pane fade show active" id="analysis-panel" role="tabpanel">
+            <div class="tab-pane fade" id="analysis-panel" role="tabpanel">
                 <div id="analysis-title-container" class="text-center h5 p-2" style="display: none;"></div>
                 <div id="average-amplitude-container" class="text-center mb-2 p-2 bg-light rounded" style="display: none;"></div>
                 <div id="chart-container"></div>
             </div>
-            <div class="tab-pane fade" id="kline-panel" role="tabpanel">
+            <div class="tab-pane fade show active" id="kline-panel" role="tabpanel">
                 <div id="kline-title-container" class="text-center h5 p-2" style="display: none;"></div>
                 <div id="kline-chart-container"></div>
             </div>
