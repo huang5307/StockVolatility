@@ -356,12 +356,12 @@ document.addEventListener('DOMContentLoaded', () => {
             averageAmplitudeContainer.innerHTML = `
                 <span class="me-4"><strong>可视区域平均日振幅:</strong> ${avgDaily}</span>
                 <span class="me-4"><strong>可视区域平均周振幅:</strong> ${avgWeekly}</span>
-                <span class="me-4"><strong>可视区域平均ATR(14):</strong> ${avgAtr}</span>`;
+                <span class="me-4"><strong>可视区域平均真实波幅:</strong> ${avgAtr}</span>`;
         };
 
         const option = {
             tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-            legend: { data: ['日振幅(%)', '周振幅(%)', 'ATR(14)%'], top: 0, inactiveColor: '#777' },
+            legend: { data: ['日振幅(%)', '周振幅(%)', '平均真实波幅(%)'], top: 0, inactiveColor: '#777' },
             grid: [
                 { left: '10%', right: '8%', top: '10%', height: '50%' },
                 { left: '10%', right: '8%', top: '65%', height: '15%' }
@@ -382,7 +382,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
                 { name: '日振幅(%)', type: 'line', data: amplitudes, smooth: true, lineStyle: { width: 2, color: '#4a90e2' }, yAxisIndex: 0 },
                 { name: '周振幅(%)', type: 'line', data: weeklyAmplitudes, smooth: true, lineStyle: { width: 2, color: '#FFD700' }, yAxisIndex: 0, connectNulls: true },
-                { name: 'ATR(14)%', type: 'line', data: atrData, smooth: true, lineStyle: { width: 2, color: '#f56a00' }, yAxisIndex: 0, connectNulls: true }
+                { name: '平均真实波幅(%)', type: 'line', data: atrData, smooth: true, lineStyle: { width: 2, color: '#f56a00' }, yAxisIndex: 0, connectNulls: true }
             ]
         };
 
