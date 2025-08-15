@@ -178,38 +178,49 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         try {
-            let dataToRender = await queryDB(stockCode, startDate, endDate);
-            let stockName = await getStockName(stockCode);
-
-            if (dataToRender.length > 0 && stockName !== stockCode) {
+            // Always try to fetch fresh data first
+            showStatus(`正在从网络获取 ${stockCode} 的最新数据...`, 'info');
+            const serverResponse = await fetchDataFromLocalServer(stockCode);
+            await saveData(serverResponse.kline, stockCode, serverResponse.name);
+            const stockName = serverResponse.name;
+            
+            if (stockName && stockName !== stockCode) {
                 updateSearchHistory(stockCode, stockName);
             }
 
-            if (dataToRender.length === 0) {
-                showStatus(`本地无 ${stockCode} 数据，正在从网络获取...`, 'info');
-                const serverResponse = await fetchDataFromLocalServer(stockCode);
-                await saveData(serverResponse.kline, stockCode, serverResponse.name);
-                stockName = serverResponse.name;
-                dataToRender = await queryDB(stockCode, startDate, endDate);
-                if (stockName && stockName !== stockCode) {
-                    updateSearchHistory(stockCode, stockName);
-                }
-            }
+            // Now query the updated DB with the desired date range
+            const dataToRender = await queryDB(stockCode, startDate, endDate);
 
             if (dataToRender.length === 0) {
-                showStatus('在指定的时间范围内没有找到数据，或无法从网络获取。', 'warning');
+                showStatus('在指定的时间范围内没有找到数据。', 'warning');
                 [amplitudeChart, klineChart].forEach(c => c.clear());
             } else {
                 showStatus(`成功加载 ${dataToRender.length} 条数据进行图表渲染。`, 'success');
                 renderCharts(dataToRender, stockCode, stockName);
                 document.getElementById('chart-tabs').style.display = 'flex';
 
-                // Save last successful query parameters
                 localStorage.setItem('lastStockCode', `${stockCode} - ${stockName}`);
                 localStorage.setItem('lastStartDate', startDateInput.value);
             }
-        } catch (error) {
-            showStatus(`查询或获取数据时发生错误: ${error.message}`, 'danger');
+
+        } catch (fetchError) {
+            // If fetching from server fails, try to use local data as a fallback
+            showStatus(`无法从网络获取数据: ${fetchError.message}。正在尝试加载本地缓存...`, 'warning');
+            try {
+                const stockName = await getStockName(stockCode);
+                const dataToRender = await queryDB(stockCode, startDate, endDate);
+
+                if (dataToRender.length === 0) {
+                    showStatus('网络和本地缓存均无可用数据。', 'danger');
+                    [amplitudeChart, klineChart].forEach(c => c.clear());
+                } else {
+                    showStatus(`成功从本地缓存加载 ${dataToRender.length} 条数据。`, 'success');
+                    renderCharts(dataToRender, stockCode, stockName);
+                    document.getElementById('chart-tabs').style.display = 'flex';
+                }
+            } catch (dbError) {
+                showStatus(`查询本地缓存时也发生错误: ${dbError.message}`, 'danger');
+            }
         } finally {
             [amplitudeChart, klineChart].forEach(c => c.hideLoading());
         }
@@ -227,6 +238,43 @@ document.addEventListener('DOMContentLoaded', () => {
         const dates = rawData.map(item => item.date);
         const volumes = rawData.map((item, index) => [index, item.volume, item.open > item.close ? -1 : 1]);
         const amplitudes = rawData.map(item => ((item.high - item.low) / item.low * 100).toFixed(2));
+
+        const calculateATR = (data, period = 14) => {
+            if (data.length < period) return new Array(data.length).fill('-');
+            
+            const trueRanges = [];
+            for (let i = 0; i < data.length; i++) {
+                const high = data[i].high;
+                const low = data[i].low;
+                if (i === 0) {
+                    trueRanges.push(high - low);
+                } else {
+                    const prevClose = data[i - 1].close;
+                    const trueRange = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+                    trueRanges.push(trueRange);
+                }
+            }
+
+            const atrValues = [];
+            let sum = 0;
+            for (let i = 0; i < period; i++) {
+                sum += trueRanges[i];
+            }
+            atrValues[period - 1] = sum / period;
+
+            for (let i = period; i < trueRanges.length; i++) {
+                atrValues[i] = (atrValues[i - 1] * (period - 1) + trueRanges[i]) / period;
+            }
+
+            const atrPercentage = atrValues.map((atr, index) => {
+                if (index < period - 1) return '-';
+                const close = data[index].close;
+                return close > 0 ? ((atr / close) * 100).toFixed(2) : '-';
+            });
+
+            return atrPercentage;
+        };
+        const atrData = calculateATR(rawData);
 
         const getWeek = (date) => {
             const d = new Date(date);
@@ -261,11 +309,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const calculateAndDisplayAverageAmplitudes = (startIdx, endIdx) => {
             const visibleData = rawData.slice(startIdx, endIdx + 1);
+            const visibleAtrData = atrData.slice(startIdx, endIdx + 1);
             if (visibleData.length === 0) {
-                averageAmplitudeContainer.innerHTML = '';
                 averageAmplitudeContainer.style.display = 'none';
                 return;
             }
+            averageAmplitudeContainer.style.display = 'block';
 
             let dailyTotal = 0, dailyCount = 0;
             visibleData.forEach(item => {
@@ -291,18 +340,28 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             }
+
+            let atrTotal = 0, atrCount = 0;
+            visibleAtrData.forEach(atr => {
+                if (atr !== '-') {
+                    atrTotal += parseFloat(atr);
+                    atrCount++;
+                }
+            });
+
             const avgDaily = dailyCount ? `${(dailyTotal / dailyCount).toFixed(2)}%` : 'N/A';
             const avgWeekly = weeklyCount ? `${(weeklyTotal / weeklyCount).toFixed(2)}%` : 'N/A';
+            const avgAtr = atrCount ? `${(atrTotal / atrCount).toFixed(2)}%` : 'N/A';
 
             averageAmplitudeContainer.innerHTML = `
                 <span class="me-4"><strong>可视区域平均日振幅:</strong> ${avgDaily}</span>
-                <span><strong>可视区域平均周振幅:</strong> ${avgWeekly}</span>`;
-            averageAmplitudeContainer.style.display = 'block';
+                <span class="me-4"><strong>可视区域平均周振幅:</strong> ${avgWeekly}</span>
+                <span class="me-4"><strong>可视区域平均ATR(14):</strong> ${avgAtr}</span>`;
         };
 
         const option = {
             tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-            legend: { data: ['日振幅(%)', '周振幅(%)'], top: 0, inactiveColor: '#777' },
+            legend: { data: ['日振幅(%)', '周振幅(%)', 'ATR(14)%'], top: 0, inactiveColor: '#777' },
             grid: [
                 { left: '10%', right: '8%', top: '10%', height: '50%' },
                 { left: '10%', right: '8%', top: '65%', height: '15%' }
@@ -322,7 +381,8 @@ document.addEventListener('DOMContentLoaded', () => {
             series: [
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
                 { name: '日振幅(%)', type: 'line', data: amplitudes, smooth: true, lineStyle: { width: 2, color: '#4a90e2' }, yAxisIndex: 0 },
-                { name: '周振幅(%)', type: 'line', data: weeklyAmplitudes, smooth: true, lineStyle: { width: 2, color: '#FFD700' }, yAxisIndex: 0, connectNulls: true }
+                { name: '周振幅(%)', type: 'line', data: weeklyAmplitudes, smooth: true, lineStyle: { width: 2, color: '#FFD700' }, yAxisIndex: 0, connectNulls: true },
+                { name: 'ATR(14)%', type: 'line', data: atrData, smooth: true, lineStyle: { width: 2, color: '#f56a00' }, yAxisIndex: 0, connectNulls: true }
             ]
         };
 
@@ -345,7 +405,7 @@ document.addEventListener('DOMContentLoaded', () => {
         klineTitleContainer.style.display = 'block';
 
         const dates = rawData.map(item => item.date);
-        const klineData = rawData.map(item => [item.open, item.close, item.low, item.high]);
+        const closeData = rawData.map(item => item.close);
         const volumes = rawData.map((item, index) => [index, item.volume, item.open > item.close ? -1 : 1]);
 
         const calculateMA = (dayCount, data) => {
@@ -359,21 +419,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 for (let j = 0; j < dayCount; j++) {
                     sum += parseFloat(data[i - j].close);
                 }
-                result.push((sum / dayCount).toFixed(2));
+                result.push(parseFloat((sum / dayCount).toFixed(4)));
             }
             return result;
         };
 
-                const allMaDays = [5, 20, 60, 240];
+        const allMaDays = [5, 20, 60, 240];
         const availableMaDays = allMaDays.filter(day => rawData.length >= day);
         
-        const legendData = [...availableMaDays.map(day => `MA${day}`)];
+        const legendData = ['收盘价', ...availableMaDays.map(day => `MA${day}`)];
         
         const maSeries = availableMaDays.map(day => ({
             name: `MA${day}`,
             type: 'line',
             data: calculateMA(day, rawData),
             smooth: true,
+            symbol: 'none',
             lineStyle: { opacity: 0.5 }
         }));
 
@@ -397,7 +458,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 { show: true, xAxisIndex: [0, 1], type: 'slider', top: '85%', start: 80, end: 100 }
             ],
             series: [
-                { name: 'K线', type: 'candlestick', data: klineData, itemStyle: { color: '#ef232a', color0: '#14b143', borderColor: '#ef232a', borderColor0: '#14b143' } },
+                { name: '收盘价', type: 'line', data: closeData, smooth: true, symbol: 'none', lineStyle: { width: 2 } },
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
                 ...maSeries
             ]
