@@ -439,7 +439,34 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
 
         const option = {
-            tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'cross' },
+                formatter: (params) => {
+                    const dataIndex = params[0].dataIndex;
+                    const currentData = rawData[dataIndex];
+                    
+                    let tooltipHtml = `${currentData.date}<br/>`;
+                    tooltipHtml += `开盘: ${currentData.open}<br/>`;
+                    tooltipHtml += `收盘: ${currentData.close}<br/>`;
+                    tooltipHtml += `最高: ${currentData.high}<br/>`;
+                    tooltipHtml += `最低: ${currentData.low}<br/>`;
+
+                    params.forEach(param => {
+                        if (param.seriesName !== '收盘价' && param.seriesName !== '成交量') {
+                            const seriesName = param.seriesName;
+                            const value = param.value;
+                            const color = param.color;
+                            if (value !== undefined && value !== null && value !== '-') {
+                                tooltipHtml += `<span style="display:inline-block;margin-right:5px;border-radius:10px;width:10px;height:10px;background-color:${color};"></span>`;
+                                tooltipHtml += `${seriesName}: ${value}<br/>`;
+                            }
+                        }
+                    });
+                    
+                    return tooltipHtml;
+                }
+            },
             legend: { data: legendData, top: 0, inactiveColor: '#777' },
             grid: [
                 { left: '10%', right: '8%', top: '10%', height: '50%' },
