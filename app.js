@@ -227,18 +227,76 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderCharts = (rawData, stockCode, stockName) => {
-        renderAmplitudeChart(rawData, stockCode, stockName);
+        renderTrueRangeChart(rawData, stockCode, stockName);
         renderKlineChart(rawData, stockCode, stockName);
     };
 
-    const renderAmplitudeChart = (rawData, stockCode, stockName) => {
-        analysisTitleContainer.innerText = `${stockCode} - ${stockName} | 振幅与成交量分析`;
+    const renderTrueRangeChart = (rawData, stockCode, stockName) => {
+        analysisTitleContainer.innerText = `${stockCode} - ${stockName} | 真实波幅与成交量分析`;
         analysisTitleContainer.style.display = 'block';
 
         const dates = rawData.map(item => item.date);
         const volumes = rawData.map((item, index) => [index, item.volume, item.open > item.close ? -1 : 1]);
-        const amplitudes = rawData.map(item => ((item.high - item.low) / item.low * 100).toFixed(2));
 
+        // 1. Calculate Daily True Range
+        const dailyTR = rawData.map((item, i) => {
+            if (i === 0) return '-'; // Not enough data for TR
+            const high = item.high;
+            const low = item.low;
+            const prevClose = rawData[i - 1].close;
+            const trueRange = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+            return (trueRange * 100).toFixed(2);
+        });
+
+        // 2. Calculate Weekly True Range
+        const getWeek = (date) => {
+            const d = new Date(date);
+            d.setHours(0, 0, 0, 0);
+            d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
+            const week1 = new Date(d.getFullYear(), 0, 4);
+            return {
+                year: d.getFullYear(),
+                week: 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7)
+            };
+        };
+
+        const weeklyData = {};
+        rawData.forEach(item => {
+            const { year, week } = getWeek(item.date);
+            const weekKey = `${year}-W${week}`;
+            if (!weeklyData[weekKey]) {
+                weeklyData[weekKey] = { high: -Infinity, low: Infinity, close: null, date: '' };
+            }
+            weeklyData[weekKey].high = Math.max(weeklyData[weekKey].high, item.high);
+            weeklyData[weekKey].low = Math.min(weeklyData[weekKey].low, item.low);
+            weeklyData[weekKey].close = item.close; // Keep track of last close of the week
+            weeklyData[weekKey].date = item.date;
+        });
+
+        const weeklyKeys = Object.keys(weeklyData).sort();
+        const weeklyTR = rawData.map(item => {
+            const { year, week } = getWeek(item.date);
+            const weekKey = `${year}-W${week}`;
+            
+            if (item.date !== weeklyData[weekKey].date) {
+                return '-';
+            }
+
+            const currentWeekIndex = weeklyKeys.indexOf(weekKey);
+            if (currentWeekIndex < 1) return '-';
+
+            const currentWeekStats = weeklyData[weekKey];
+            const prevWeekKey = weeklyKeys[currentWeekIndex - 1];
+            const prevWeekClose = weeklyData[prevWeekKey].close;
+
+            const high = currentWeekStats.high;
+            const low = currentWeekStats.low;
+            
+            const trueRange = Math.max(high - low, Math.abs(high - prevWeekClose), Math.abs(low - prevWeekClose));
+            return (trueRange * 100).toFixed(2);
+        });
+
+        // 3. Calculate ATR (for display text only)
         const calculateATR = (data, period = 14) => {
             if (data.length < period) return new Array(data.length).fill('-');
             
@@ -268,78 +326,39 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const atrPercentage = atrValues.map((atr, index) => {
                 if (index < period - 1) return '-';
-                const close = data[index].close;
-                return close > 0 ? ((atr / close) * 100).toFixed(2) : '-';
+                return (atr * 100).toFixed(2);
             });
 
             return atrPercentage;
         };
         const atrData = calculateATR(rawData);
 
-        const getWeek = (date) => {
-            const d = new Date(date);
-            d.setHours(0, 0, 0, 0);
-            d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
-            const week1 = new Date(d.getFullYear(), 0, 4);
-            return 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7);
-        };
-
-        const weeklyData = {};
-        rawData.forEach(item => {
-            const year = new Date(item.date).getFullYear();
-            const week = getWeek(item.date);
-            const weekKey = `${year}-W${week}`;
-            if (!weeklyData[weekKey]) {
-                weeklyData[weekKey] = { high: -Infinity, low: Infinity, endDate: '' };
-            }
-            weeklyData[weekKey].high = Math.max(weeklyData[weekKey].high, item.high);
-            weeklyData[weekKey].low = Math.min(weeklyData[weekKey].low, item.low);
-            weeklyData[weekKey].endDate = item.date;
-        });
-
-        const weeklyAmplitudes = rawData.map(item => {
-            const year = new Date(item.date).getFullYear();
-            const week = getWeek(item.date);
-            const weekKey = `${year}-W${week}`;
-            if (item.date === weeklyData[weekKey].endDate && weeklyData[weekKey].low > 0) {
-                return ((weeklyData[weekKey].high - weeklyData[weekKey].low) / weeklyData[weekKey].low * 100).toFixed(2);
-            }
-            return '-';
-        });
-
-        const calculateAndDisplayAverageAmplitudes = (startIdx, endIdx) => {
-            const visibleData = rawData.slice(startIdx, endIdx + 1);
-            const visibleAtrData = atrData.slice(startIdx, endIdx + 1);
-            if (visibleData.length === 0) {
+        const calculateAndDisplayAverageTrueRanges = (startIdx, endIdx) => {
+            if (rawData.length === 0) {
                 averageAmplitudeContainer.style.display = 'none';
                 return;
             }
             averageAmplitudeContainer.style.display = 'block';
 
+            const visibleDailyTR = dailyTR.slice(startIdx, endIdx + 1);
+            const visibleWeeklyTR = weeklyTR.slice(startIdx, endIdx + 1);
+            const visibleAtrData = atrData.slice(startIdx, endIdx + 1);
+
             let dailyTotal = 0, dailyCount = 0;
-            visibleData.forEach(item => {
-                if (item.low > 0) {
-                    dailyTotal += ((item.high - item.low) / item.low * 100);
+            visibleDailyTR.forEach(tr => {
+                if (tr !== '-') {
+                    dailyTotal += parseFloat(tr);
                     dailyCount++;
                 }
             });
 
             let weeklyTotal = 0, weeklyCount = 0;
-            const visibleWeeklyKeys = new Set();
-            for (let i = startIdx; i <= endIdx; i++) {
-                const item = rawData[i];
-                const year = new Date(item.date).getFullYear();
-                const week = getWeek(item.date);
-                const weekKey = `${year}-W${week}`;
-                if (!visibleWeeklyKeys.has(weekKey) && weeklyAmplitudes[i] !== '-') {
-                    const weekInfo = weeklyData[weekKey];
-                    if (weekInfo.low > 0) {
-                        weeklyTotal += ((weekInfo.high - weekInfo.low) / weekInfo.low * 100);
-                        weeklyCount++;
-                        visibleWeeklyKeys.add(weekKey);
-                    }
+            visibleWeeklyTR.forEach(tr => {
+                if (tr !== '-') {
+                    weeklyTotal += parseFloat(tr);
+                    weeklyCount++;
                 }
-            }
+            });
 
             let atrTotal = 0, atrCount = 0;
             visibleAtrData.forEach(atr => {
@@ -354,23 +373,20 @@ document.addEventListener('DOMContentLoaded', () => {
             const avgAtr = atrCount ? `${(atrTotal / atrCount).toFixed(2)}%` : 'N/A';
 
             averageAmplitudeContainer.innerHTML = `
-                <span class="me-4"><strong>可视区域平均日振幅:</strong> ${avgDaily}</span>
-                <span class="me-4"><strong>可视区域平均周振幅:</strong> ${avgWeekly}</span>
+                <span class="me-4"><strong>可视区域平均日波幅:</strong> ${avgDaily}</span>
+                <span class="me-4"><strong>可视区域平均周波幅:</strong> ${avgWeekly}</span>
                 <span class="me-4"><strong>可视区域平均真实波幅:</strong> ${avgAtr}</span>`;
         };
 
-        const amplitudeColors = {
-            '日振幅(%)': '#4a90e2',
-            '周振幅(%)': '#FFD700',
-            '平均真实波幅(%)': '#f56a00'
+        const trColors = {
+            '日真实波幅(%)': '#4a90e2',
+            '周真实波幅(%)': '#FFD700'
         };
 
-        const legendData = Object.keys(amplitudeColors).map(name => ({
+        const legendData = Object.keys(trColors).map(name => ({
             name: name,
             icon: 'rect',
-            itemStyle: {
-                color: amplitudeColors[name]
-            }
+            itemStyle: { color: trColors[name] }
         }));
 
         const option = {
@@ -394,24 +410,23 @@ document.addEventListener('DOMContentLoaded', () => {
             ],
             series: [
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
-                { name: '日振幅(%)', type: 'line', data: amplitudes, smooth: true, lineStyle: { width: 2, color: amplitudeColors['日振幅(%)'] }, yAxisIndex: 0 },
-                { name: '周振幅(%)', type: 'line', data: weeklyAmplitudes, smooth: true, lineStyle: { width: 2, color: amplitudeColors['周振幅(%)'] }, yAxisIndex: 0, connectNulls: true },
-                { name: '平均真实波幅(%)', type: 'line', data: atrData, smooth: true, lineStyle: { width: 2, color: amplitudeColors['平均真实波幅(%)'] }, yAxisIndex: 0, connectNulls: true }
+                { name: '日真实波幅(%)', type: 'line', data: dailyTR, smooth: true, lineStyle: { width: 2, color: trColors['日真实波幅(%)'] }, yAxisIndex: 0 },
+                { name: '周真实波幅(%)', type: 'line', data: weeklyTR, smooth: true, lineStyle: { width: 2, color: trColors['周真实波幅(%)'] }, yAxisIndex: 0, connectNulls: true }
             ]
         };
 
         amplitudeChart.setOption(option, true);
         
-        const updateAverageAmplitudes = () => {
+        const updateAverageTrueRanges = () => {
             const dataZoom = amplitudeChart.getOption().dataZoom[0];
             const startIndex = Math.floor(rawData.length * dataZoom.start / 100);
             const endIndex = Math.ceil(rawData.length * dataZoom.end / 100) - 1;
-            calculateAndDisplayAverageAmplitudes(startIndex, endIndex);
+            calculateAndDisplayAverageTrueRanges(startIndex, endIndex);
         };
 
         amplitudeChart.off('datazoom');
-        amplitudeChart.on('datazoom', updateAverageAmplitudes);
-        updateAverageAmplitudes(); // Initial call
+        amplitudeChart.on('datazoom', updateAverageTrueRanges);
+        updateAverageTrueRanges(); // Initial call
     };
 
     const renderKlineChart = (rawData, stockCode, stockName) => {
