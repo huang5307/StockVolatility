@@ -359,12 +359,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 <span class="me-4"><strong>可视区域平均真实波幅:</strong> ${avgAtr}</span>`;
         };
 
+        const amplitudeColors = {
+            '日振幅(%)': '#4a90e2',
+            '周振幅(%)': '#FFD700',
+            '平均真实波幅(%)': '#f56a00'
+        };
+
+        const legendData = Object.keys(amplitudeColors).map(name => ({
+            name: name,
+            icon: 'rect',
+            itemStyle: {
+                color: amplitudeColors[name]
+            }
+        }));
+
         const option = {
             tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-            legend: { data: ['日振幅(%)', '周振幅(%)', '平均真实波幅(%)'], top: 0, inactiveColor: '#777' },
+            legend: { data: legendData, top: 0, inactiveColor: '#777' },
             grid: [
-                { left: '10%', right: '8%', top: '10%', height: '50%' },
-                { left: '10%', right: '8%', top: '65%', height: '15%' }
+                { left: '10%', right: '15%', top: '10%', height: '50%' },
+                { left: '10%', right: '15%', top: '65%', height: '15%' }
             ],
             xAxis: [
                 { type: 'category', data: dates, scale: true, boundaryGap: false, axisLine: { show: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' },
@@ -380,9 +394,9 @@ document.addEventListener('DOMContentLoaded', () => {
             ],
             series: [
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
-                { name: '日振幅(%)', type: 'line', data: amplitudes, smooth: true, lineStyle: { width: 2, color: '#4a90e2' }, yAxisIndex: 0 },
-                { name: '周振幅(%)', type: 'line', data: weeklyAmplitudes, smooth: true, lineStyle: { width: 2, color: '#FFD700' }, yAxisIndex: 0, connectNulls: true },
-                { name: '平均真实波幅(%)', type: 'line', data: atrData, smooth: true, lineStyle: { width: 2, color: '#f56a00' }, yAxisIndex: 0, connectNulls: true }
+                { name: '日振幅(%)', type: 'line', data: amplitudes, smooth: true, lineStyle: { width: 2, color: amplitudeColors['日振幅(%)'] }, yAxisIndex: 0 },
+                { name: '周振幅(%)', type: 'line', data: weeklyAmplitudes, smooth: true, lineStyle: { width: 2, color: amplitudeColors['周振幅(%)'] }, yAxisIndex: 0, connectNulls: true },
+                { name: '平均真实波幅(%)', type: 'line', data: atrData, smooth: true, lineStyle: { width: 2, color: amplitudeColors['平均真实波幅(%)'] }, yAxisIndex: 0, connectNulls: true }
             ]
         };
 
@@ -425,9 +439,23 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         const allMaDays = [5, 20, 60, 240];
+        const closePriceColor = '#000000';
+        const maColors = {
+            5: '#E87A90',
+            20: '#84D0B2',
+            60: '#A7A2D7',
+            240: '#F4B884'
+        };
         const availableMaDays = allMaDays.filter(day => rawData.length >= day);
         
-        const legendData = ['收盘价', ...availableMaDays.map(day => `MA${day}`)];
+        const legendData = [
+            { name: '收盘价', icon: 'rect', itemStyle: { color: closePriceColor } },
+            ...availableMaDays.map(day => ({
+                name: `MA${day}`,
+                icon: 'rect',
+                itemStyle: { color: maColors[day] }
+            }))
+        ];
         
         const maSeries = availableMaDays.map(day => ({
             name: `MA${day}`,
@@ -435,8 +463,65 @@ document.addEventListener('DOMContentLoaded', () => {
             data: calculateMA(day, rawData),
             smooth: true,
             symbol: 'none',
-            lineStyle: { opacity: 0.5 }
+            lineStyle: { 
+                opacity: 0.8,
+                color: maColors[day]
+            }
         }));
+
+        // --- Updated Feature: Highest/Lowest Price Lines ---
+        const getPeriodExtreme = (period, data) => {
+            if (data.length < 1) return { high: 0, low: 0 };
+            const startIndex = Math.max(0, data.length - period);
+            const relevantData = data.slice(startIndex);
+            let high = -Infinity;
+            let low = Infinity;
+            relevantData.forEach(item => {
+                if (item.high > high) high = item.high;
+                if (item.low < low) low = item.low;
+            });
+            return { high, low };
+        };
+
+        const markLineData = [];
+        const extremes = {};
+
+        if (rawData.length >= 20) {
+            const ext20 = getPeriodExtreme(20, rawData);
+            extremes[20] = { high: ext20.high, low: ext20.low };
+        }
+        if (rawData.length >= 60) {
+            const ext60 = getPeriodExtreme(60, rawData);
+            extremes[60] = { high: ext60.high, low: ext60.low };
+        }
+
+        const high20 = extremes[20] ? extremes[20].high : null;
+        const low20 = extremes[20] ? extremes[20].low : null;
+        const high60 = extremes[60] ? extremes[60].high : null;
+        const low60 = extremes[60] ? extremes[60].low : null;
+
+        if (high60 !== null && high60 === high20) {
+            markLineData.push({ yAxis: high60, name: '60/20日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+        } else {
+            if (high60 !== null) {
+                markLineData.push({ yAxis: high60, name: '60日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+            }
+            if (high20 !== null) {
+                markLineData.push({ yAxis: high20, name: '20日最高', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+            }
+        }
+
+        if (low60 !== null && low60 === low20) {
+            markLineData.push({ yAxis: low60, name: '60/20日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+        } else {
+            if (low60 !== null) {
+                markLineData.push({ yAxis: low60, name: '60日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+            }
+            if (low20 !== null) {
+                markLineData.push({ yAxis: low20, name: '20日最低', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+            }
+        }
+        // --- End of Updated Feature ---
 
         const option = {
             tooltip: {
@@ -469,8 +554,8 @@ document.addEventListener('DOMContentLoaded', () => {
             },
             legend: { data: legendData, top: 0, inactiveColor: '#777' },
             grid: [
-                { left: '10%', right: '8%', top: '10%', height: '50%' },
-                { left: '10%', right: '8%', top: '65%', height: '15%' }
+                { left: '10%', right: '15%', top: '10%', height: '50%' },
+                { left: '10%', right: '15%', top: '65%', height: '15%' }
             ],
             xAxis: [
                 { type: 'category', data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' },
@@ -485,7 +570,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 { show: true, xAxisIndex: [0, 1], type: 'slider', top: '85%', start: 80, end: 100 }
             ],
             series: [
-                { name: '收盘价', type: 'line', data: closeData, smooth: true, symbol: 'none', lineStyle: { width: 2 } },
+                { 
+                    name: '收盘价', 
+                    type: 'line', 
+                    data: closeData, 
+                    smooth: true, 
+                    symbol: 'none', 
+                    lineStyle: { 
+                        width: 2,
+                        color: closePriceColor
+                    },
+                    markLine: {
+                        symbol: ['none', 'none'],
+                        data: markLineData,
+                        emphasis: {
+                            lineStyle: {
+                                width: 3
+                            }
+                        }
+                    }
+                },
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
                 ...maSeries
             ]
