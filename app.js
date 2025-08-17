@@ -159,7 +159,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const stockCodeWithPossibleName = stockCodeInput.value.trim();
         const stockCode = stockCodeWithPossibleName.split(' ')[0];
-        const startDate = startDateInput.value || '0000-01-01';
+        const startDate = startDateInput.value || '2000-01-01';
         const endDate = endDateInput.value || '9999-12-31';
 
         if (!stockCode) {
@@ -167,6 +167,11 @@ document.addEventListener('DOMContentLoaded', () => {
             [amplitudeChart, klineChart].forEach(c => c.hideLoading());
             return;
         }
+
+        // Adjust start date to get historical data for calculations (e.g., MA240)
+        let queryStartDate = new Date(startDate);
+        queryStartDate.setDate(queryStartDate.getDate() - 365); // Go back ~1 year
+        const queryStartDateString = queryStartDate.toISOString().slice(0, 10);
 
         const queryDB = (code, start, end) => {
             return new Promise((resolve, reject) => {
@@ -189,14 +194,14 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             // Now query the updated DB with the desired date range
-            const dataToRender = await queryDB(stockCode, startDate, endDate);
+            const allData = await queryDB(stockCode, queryStartDateString, endDate);
 
-            if (dataToRender.length === 0) {
+            if (allData.length === 0) {
                 showStatus('在指定的时间范围内没有找到数据。', 'warning');
                 [amplitudeChart, klineChart].forEach(c => c.clear());
             } else {
-                showStatus(`成功加载 ${dataToRender.length} 条数据进行图表渲染。`, 'success');
-                renderCharts(dataToRender, stockCode, stockName);
+                showStatus(`成功加载 ${allData.length} 条数据进行图表渲染。`, 'success');
+                renderCharts(allData, stockCode, stockName);
                 document.getElementById('chart-tabs').style.display = 'flex';
 
                 localStorage.setItem('lastStockCode', `${stockCode} - ${stockName}`);
@@ -205,21 +210,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
         } catch (fetchError) {
             // If fetching from server fails, try to use local data as a fallback
-            showStatus(`无法从网络获取数据: ${fetchError.message}。正在尝试加载本地缓存...`, 'warning');
             try {
                 const stockName = await getStockName(stockCode);
-                const dataToRender = await queryDB(stockCode, startDate, endDate);
+                const allData = await queryDB(stockCode, queryStartDateString, endDate);
 
-                if (dataToRender.length === 0) {
-                    showStatus('网络和本地缓存均无可用数据。', 'danger');
+                if (allData.length === 0) {
+                    // If DB is also empty, show the original network error, which is more specific.
+                    showStatus(`错误: ${fetchError.message}`, 'danger');
                     [amplitudeChart, klineChart].forEach(c => c.clear());
                 } else {
-                    showStatus(`成功从本地缓存加载 ${dataToRender.length} 条数据。`, 'success');
-                    renderCharts(dataToRender, stockCode, stockName);
+                    // If we have cached data, show a warning about the network and render the old data.
+                    showStatus(`无法从网络获取数据: ${fetchError.message}。正在显示本地缓存...`, 'warning');
+                    renderCharts(allData, stockCode, stockName);
                     document.getElementById('chart-tabs').style.display = 'flex';
+                    localStorage.setItem('lastStockCode', `${stockCode} - ${stockName}`);
+                    localStorage.setItem('lastStartDate', startDateInput.value);
                 }
             } catch (dbError) {
-                showStatus(`查询本地缓存时也发生错误: ${dbError.message}`, 'danger');
+                showStatus(`网络和本地缓存查询均失败: ${dbError.message}`, 'danger');
             }
         } finally {
             [amplitudeChart, klineChart].forEach(c => c.hideLoading());
@@ -248,55 +256,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return (trueRange * 100).toFixed(2);
         });
 
-        // 2. Calculate Weekly True Range
-        const getWeek = (date) => {
-            const d = new Date(date);
-            d.setHours(0, 0, 0, 0);
-            d.setDate(d.getDate() + 3 - (d.getDay() + 6) % 7);
-            const week1 = new Date(d.getFullYear(), 0, 4);
-            return {
-                year: d.getFullYear(),
-                week: 1 + Math.round(((d.getTime() - week1.getTime()) / 86400000 - 3 + (week1.getDay() + 6) % 7) / 7)
-            };
-        };
-
-        const weeklyData = {};
-        rawData.forEach(item => {
-            const { year, week } = getWeek(item.date);
-            const weekKey = `${year}-W${week}`;
-            if (!weeklyData[weekKey]) {
-                weeklyData[weekKey] = { high: -Infinity, low: Infinity, close: null, date: '' };
-            }
-            weeklyData[weekKey].high = Math.max(weeklyData[weekKey].high, item.high);
-            weeklyData[weekKey].low = Math.min(weeklyData[weekKey].low, item.low);
-            weeklyData[weekKey].close = item.close; // Keep track of last close of the week
-            weeklyData[weekKey].date = item.date;
-        });
-
-        const weeklyKeys = Object.keys(weeklyData).sort();
-        const weeklyTR = rawData.map(item => {
-            const { year, week } = getWeek(item.date);
-            const weekKey = `${year}-W${week}`;
-            
-            if (item.date !== weeklyData[weekKey].date) {
-                return '-';
-            }
-
-            const currentWeekIndex = weeklyKeys.indexOf(weekKey);
-            if (currentWeekIndex < 1) return '-';
-
-            const currentWeekStats = weeklyData[weekKey];
-            const prevWeekKey = weeklyKeys[currentWeekIndex - 1];
-            const prevWeekClose = weeklyData[prevWeekKey].close;
-
-            const high = currentWeekStats.high;
-            const low = currentWeekStats.low;
-            
-            const trueRange = Math.max(high - low, Math.abs(high - prevWeekClose), Math.abs(low - prevWeekClose));
-            return (trueRange * 100).toFixed(2);
-        });
-
-        // 3. Calculate ATR (for display text only)
+        // 2. Calculate ATR (for display text only)
         const calculateATR = (data, period = 14) => {
             if (data.length < period) return new Array(data.length).fill('-');
             
@@ -340,25 +300,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             averageAmplitudeContainer.style.display = 'block';
 
-            const visibleDailyTR = dailyTR.slice(startIdx, endIdx + 1);
-            const visibleWeeklyTR = weeklyTR.slice(startIdx, endIdx + 1);
             const visibleAtrData = atrData.slice(startIdx, endIdx + 1);
-
-            let dailyTotal = 0, dailyCount = 0;
-            visibleDailyTR.forEach(tr => {
-                if (tr !== '-') {
-                    dailyTotal += parseFloat(tr);
-                    dailyCount++;
-                }
-            });
-
-            let weeklyTotal = 0, weeklyCount = 0;
-            visibleWeeklyTR.forEach(tr => {
-                if (tr !== '-') {
-                    weeklyTotal += parseFloat(tr);
-                    weeklyCount++;
-                }
-            });
 
             let atrTotal = 0, atrCount = 0;
             visibleAtrData.forEach(atr => {
@@ -368,19 +310,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            const avgDaily = dailyCount ? `${(dailyTotal / dailyCount).toFixed(2)}%` : 'N/A';
-            const avgWeekly = weeklyCount ? `${(weeklyTotal / weeklyCount).toFixed(2)}%` : 'N/A';
             const avgAtr = atrCount ? `${(atrTotal / atrCount).toFixed(2)}%` : 'N/A';
 
             averageAmplitudeContainer.innerHTML = `
-                <span class="me-4"><strong>可视区域平均日波幅:</strong> ${avgDaily}</span>
-                <span class="me-4"><strong>可视区域平均周波幅:</strong> ${avgWeekly}</span>
                 <span class="me-4"><strong>可视区域平均真实波幅:</strong> ${avgAtr}</span>`;
         };
 
         const trColors = {
-            '日真实波幅(%)': '#4a90e2',
-            '周真实波幅(%)': '#FFD700'
+            '日真实波幅(%)': '#4a90e2'
         };
 
         const legendData = Object.keys(trColors).map(name => ({
@@ -401,7 +338,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 { type: 'category', gridIndex: 1, data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' }
             ],
             yAxis: [
-                { scale: true, splitArea: { show: false }, axisLine: { show: false }, axisLabel: { formatter: '{value} %' } },
+                {
+                    scale: true,
+                    splitArea: { show: false },
+                    axisLine: { show: false },
+                    axisLabel: {
+                        formatter: (value) => {
+                            const dataZoom = amplitudeChart.getOption().dataZoom[0];
+                            const startIndex = Math.floor(rawData.length * dataZoom.start / 100);
+                            const endIndex = Math.ceil(rawData.length * dataZoom.end / 100) - 1;
+                            
+                            const visibleData = dailyTR.slice(startIndex, endIndex + 1).filter(v => v !== '-');
+                            if (visibleData.length === 0) {
+                                return `${value} %`;
+                            }
+
+                            const countAbove = visibleData.filter(v => parseFloat(v) > value).length;
+                            const percentage = (countAbove / visibleData.length * 100).toFixed(2);
+                            
+                            return `${value} % (${percentage}%)`;
+                        }
+                    }
+                },
                 { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
             ],
             dataZoom: [
@@ -410,23 +368,47 @@ document.addEventListener('DOMContentLoaded', () => {
             ],
             series: [
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
-                { name: '日真实波幅(%)', type: 'line', data: dailyTR, smooth: true, lineStyle: { width: 2, color: trColors['日真实波幅(%)'] }, yAxisIndex: 0 },
-                { name: '周真实波幅(%)', type: 'line', data: weeklyTR, smooth: true, lineStyle: { width: 2, color: trColors['周真实波幅(%)'] }, yAxisIndex: 0, connectNulls: true }
+                { name: '日真实波幅(%)', type: 'line', data: dailyTR, smooth: true, lineStyle: { width: 2, color: trColors['日真实波幅(%)'] }, yAxisIndex: 0 }
             ]
         };
 
         amplitudeChart.setOption(option, true);
         
-        const updateAverageTrueRanges = () => {
+        const updateReadouts = () => {
             const dataZoom = amplitudeChart.getOption().dataZoom[0];
             const startIndex = Math.floor(rawData.length * dataZoom.start / 100);
             const endIndex = Math.ceil(rawData.length * dataZoom.end / 100) - 1;
             calculateAndDisplayAverageTrueRanges(startIndex, endIndex);
+            
+            // Force y-axis label refresh
+            amplitudeChart.setOption({
+                yAxis: [
+                    {
+                        axisLabel: {
+                            formatter: (value) => {
+                                const dataZoom = amplitudeChart.getOption().dataZoom[0];
+                                const startIndex = Math.floor(rawData.length * dataZoom.start / 100);
+                                const endIndex = Math.ceil(rawData.length * dataZoom.end / 100) - 1;
+                                
+                                const visibleData = dailyTR.slice(startIndex, endIndex + 1).filter(v => v !== '-');
+                                if (visibleData.length === 0) {
+                                    return `${value} %`;
+                                }
+
+                                const countAbove = visibleData.filter(v => parseFloat(v) > value).length;
+                                const percentage = (countAbove / visibleData.length * 100).toFixed(2);
+                                
+                                return `${value} % (${percentage}%)`;
+                            }
+                        }
+                    }
+                ]
+            });
         };
 
         amplitudeChart.off('datazoom');
-        amplitudeChart.on('datazoom', updateAverageTrueRanges);
-        updateAverageTrueRanges(); // Initial call
+        amplitudeChart.on('datazoom', updateReadouts);
+        updateReadouts(); // Initial call
     };
 
     const renderKlineChart = (rawData, stockCode, stockName) => {
@@ -577,7 +559,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 { type: 'category', gridIndex: 1, data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' }
             ],
             yAxis: [
-                { scale: true, splitArea: { show: true } },
+                { 
+                    scale: true, 
+                    splitArea: { show: true },
+                    max: value => {
+                        const highestMark = Math.max(high20 || -Infinity, high60 || -Infinity);
+                        if (highestMark === -Infinity) return value.max;
+                        return Math.max(value.max, highestMark) * 1.01;
+                    },
+                    min: value => {
+                        const lowestMark = Math.min(low20 || Infinity, low60 || Infinity);
+                        if (lowestMark === Infinity) return value.min;
+                        return Math.min(value.min, lowestMark) * 0.99;
+                    }
+                },
                 { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
             ],
             dataZoom: [
