@@ -497,25 +497,27 @@ document.addEventListener('DOMContentLoaded', () => {
         const high60 = extremes[60] ? extremes[60].high : null;
         const low60 = extremes[60] ? extremes[60].low : null;
 
+        const labelFormatter = { label: { formatter: (p) => `${p.name}: ${p.value.toFixed(3)}` } };
+
         if (high60 !== null && high60 === high20) {
-            markLineData.push({ yAxis: high60, name: '60/20日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+            markLineData.push({ yAxis: high60, name: '60/20日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, ...labelFormatter });
         } else {
             if (high60 !== null) {
-                markLineData.push({ yAxis: high60, name: '60日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+                markLineData.push({ yAxis: high60, name: '60日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, ...labelFormatter });
             }
             if (high20 !== null) {
-                markLineData.push({ yAxis: high20, name: '20日最高', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+                markLineData.push({ yAxis: high20, name: '20日最高', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, ...labelFormatter });
             }
         }
 
         if (low60 !== null && low60 === low20) {
-            markLineData.push({ yAxis: low60, name: '60/20日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+            markLineData.push({ yAxis: low60, name: '60/20日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, ...labelFormatter });
         } else {
             if (low60 !== null) {
-                markLineData.push({ yAxis: low60, name: '60日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+                markLineData.push({ yAxis: low60, name: '60日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, ...labelFormatter });
             }
             if (low20 !== null) {
-                markLineData.push({ yAxis: low20, name: '20日最低', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, label: { formatter: '{b}: {c}' } });
+                markLineData.push({ yAxis: low20, name: '20日最低', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, ...labelFormatter });
             }
         }
         // --- End of Updated Feature ---
