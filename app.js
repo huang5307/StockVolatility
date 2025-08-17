@@ -412,8 +412,6 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderKlineChart = (rawData, stockCode, stockName) => {
-        klineTitleContainer.innerText = `${stockCode} - ${stockName} | K线图与成交量`;
-        klineTitleContainer.style.display = 'block';
 
         const dates = rawData.map(item => item.date);
         const closeData = rawData.map(item => item.close);
@@ -474,8 +472,10 @@ document.addEventListener('DOMContentLoaded', () => {
             let high = -Infinity;
             let low = Infinity;
             relevantData.forEach(item => {
-                if (item.high > high) high = item.high;
-                if (item.low < low) low = item.low;
+                const itemHigh = parseFloat(item.high);
+                const itemLow = parseFloat(item.low);
+                if (itemHigh > high) high = itemHigh;
+                if (itemLow < low) low = itemLow;
             });
             return { high, low };
         };
@@ -497,27 +497,28 @@ document.addEventListener('DOMContentLoaded', () => {
         const high60 = extremes[60] ? extremes[60].high : null;
         const low60 = extremes[60] ? extremes[60].low : null;
 
-        const labelFormatter = { label: { formatter: (p) => `${p.name}: ${p.value.toFixed(3)}` } };
+        klineTitleContainer.innerText = `${stockCode} - ${stockName} | K线图与成交量`;
+        klineTitleContainer.style.display = 'block';
 
         if (high60 !== null && high60 === high20) {
-            markLineData.push({ yAxis: high60, name: '60/20日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, ...labelFormatter });
+            markLineData.push({ yAxis: high60, name: '60/20日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: `60/20日最高: ${high60.toFixed(3)}` } });
         } else {
             if (high60 !== null) {
-                markLineData.push({ yAxis: high60, name: '60日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, ...labelFormatter });
+                markLineData.push({ yAxis: high60, name: '60日最高', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: `60日最高: ${high60.toFixed(3)}` } });
             }
             if (high20 !== null) {
-                markLineData.push({ yAxis: high20, name: '20日最高', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, ...labelFormatter });
+                markLineData.push({ yAxis: high20, name: '20日最高', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, label: { formatter: `20日最高: ${high20.toFixed(3)}` } });
             }
         }
 
         if (low60 !== null && low60 === low20) {
-            markLineData.push({ yAxis: low60, name: '60/20日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, ...labelFormatter });
+            markLineData.push({ yAxis: low60, name: '60/20日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: `60/20日最低: ${low60.toFixed(3)}` } });
         } else {
             if (low60 !== null) {
-                markLineData.push({ yAxis: low60, name: '60日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, ...labelFormatter });
+                markLineData.push({ yAxis: low60, name: '60日最低', lineStyle: { color: maColors[60], type: 'dashed', width: 2 }, label: { formatter: `60日最低: ${low60.toFixed(3)}` } });
             }
             if (low20 !== null) {
-                markLineData.push({ yAxis: low20, name: '20日最低', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, ...labelFormatter });
+                markLineData.push({ yAxis: low20, name: '20日最低', lineStyle: { color: maColors[20], type: 'dashed', width: 2 }, label: { formatter: `20日最低: ${low20.toFixed(3)}` } });
             }
         }
         // --- End of Updated Feature ---
