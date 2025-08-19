@@ -240,59 +240,29 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderTrueRangeChart = (rawData, stockCode, stockName) => {
-        analysisTitleContainer.innerText = `${stockCode} - ${stockName} | 真实波幅与成交量分析`;
+        analysisTitleContainer.innerText = `${stockCode} - ${stockName} | 真实波幅比率与成交量分析`;
         analysisTitleContainer.style.display = 'block';
 
         const dates = rawData.map(item => item.date);
         const volumes = rawData.map((item, index) => [index, item.volume, item.open > item.close ? -1 : 1]);
 
-        // 1. Calculate Daily True Range
-        const dailyTR = rawData.map((item, i) => {
-            if (i === 0) return '-'; // Not enough data for TR
+        // 1. Calculate True Range and True Range Ratio
+        const trueRanges = rawData.map((item, i) => {
+            if (i === 0) return '-';
             const high = item.high;
             const low = item.low;
             const prevClose = rawData[i - 1].close;
-            const trueRange = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
-            return (trueRange * 100).toFixed(2);
+            return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
         });
 
-        // 2. Calculate ATR (for display text only)
-        const calculateATR = (data, period = 14) => {
-            if (data.length < period) return new Array(data.length).fill('-');
-            
-            const trueRanges = [];
-            for (let i = 0; i < data.length; i++) {
-                const high = data[i].high;
-                const low = data[i].low;
-                if (i === 0) {
-                    trueRanges.push(high - low);
-                } else {
-                    const prevClose = data[i - 1].close;
-                    const trueRange = Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
-                    trueRanges.push(trueRange);
-                }
-            }
+        const trueRangeRatios = rawData.map((item, i) => {
+            if (i === 0 || item.close == 0) return '-';
+            const tr = trueRanges[i];
+            if (tr === '-') return '-';
+            return ((tr / item.close) * 100).toFixed(2);
+        });
 
-            const atrValues = [];
-            let sum = 0;
-            for (let i = 0; i < period; i++) {
-                sum += trueRanges[i];
-            }
-            atrValues[period - 1] = sum / period;
-
-            for (let i = period; i < trueRanges.length; i++) {
-                atrValues[i] = (atrValues[i - 1] * (period - 1) + trueRanges[i]) / period;
-            }
-
-            const atrPercentage = atrValues.map((atr, index) => {
-                if (index < period - 1) return '-';
-                return (atr * 100).toFixed(2);
-            });
-
-            return atrPercentage;
-        };
-        const atrData = calculateATR(rawData);
-
+        // 2. Calculate Average True Range for display text
         const calculateAndDisplayAverageTrueRanges = (startIdx, endIdx) => {
             if (rawData.length === 0) {
                 averageAmplitudeContainer.style.display = 'none';
@@ -300,24 +270,24 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             averageAmplitudeContainer.style.display = 'block';
 
-            const visibleAtrData = atrData.slice(startIdx, endIdx + 1);
+            const visibleTrueRanges = trueRanges.slice(startIdx, endIdx + 1);
 
-            let atrTotal = 0, atrCount = 0;
-            visibleAtrData.forEach(atr => {
-                if (atr !== '-') {
-                    atrTotal += parseFloat(atr);
-                    atrCount++;
+            let trTotal = 0, trCount = 0;
+            visibleTrueRanges.forEach(tr => {
+                if (tr !== '-') {
+                    trTotal += tr;
+                    trCount++;
                 }
             });
 
-            const avgAtr = atrCount ? `${(atrTotal / atrCount).toFixed(2)}%` : 'N/A';
+            const avgTR = trCount ? (trTotal / trCount).toFixed(3) : 'N/A';
 
             averageAmplitudeContainer.innerHTML = `
-                <span class="me-4"><strong>可视区域平均真实波幅:</strong> ${avgAtr}</span>`;
+                <span class="me-4"><strong>可视区域平均真实波幅:</strong> ${avgTR}</span>`;
         };
 
         const trColors = {
-            '日真实波幅(%)': '#4a90e2'
+            '真实波幅比率(%)': '#4a90e2'
         };
 
         const legendData = Object.keys(trColors).map(name => ({
@@ -327,7 +297,28 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
 
         const option = {
-            tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'cross' },
+                formatter: (params) => {
+                    const dataIndex = params[0].dataIndex;
+                    const date = dates[dataIndex];
+                    const ratio = trueRangeRatios[dataIndex];
+                    const closePrice = rawData[dataIndex].close;
+                    const trueRange = trueRanges[dataIndex];
+
+                    if (ratio === '-') {
+                        return '';
+                    }
+
+                    let tooltipHtml = `${date}<br/>`;
+                    tooltipHtml += `${params[0].marker} ${params[0].seriesName}: <strong>${ratio}%</strong><br/>`;
+                    tooltipHtml += `收盘价: ${closePrice}<br/>`;
+                    tooltipHtml += `真实波幅: ${trueRange.toFixed(3)}`;
+
+                    return tooltipHtml;
+                }
+            },
             legend: { data: legendData, top: 0, inactiveColor: '#777' },
             grid: [
                 { left: '10%', right: '15%', top: '10%', height: '50%' },
@@ -348,7 +339,7 @@ document.addEventListener('DOMContentLoaded', () => {
                             const startIndex = Math.floor(rawData.length * dataZoom.start / 100);
                             const endIndex = Math.ceil(rawData.length * dataZoom.end / 100) - 1;
                             
-                            const visibleData = dailyTR.slice(startIndex, endIndex + 1).filter(v => v !== '-');
+                            const visibleData = trueRangeRatios.slice(startIndex, endIndex + 1).filter(v => v !== '-');
                             if (visibleData.length === 0) {
                                 return `${value} %`;
                             }
@@ -368,7 +359,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ],
             series: [
                 { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
-                { name: '日真实波幅(%)', type: 'line', data: dailyTR, smooth: true, lineStyle: { width: 2, color: trColors['日真实波幅(%)'] }, yAxisIndex: 0 }
+                { name: '真实波幅比率(%)', type: 'line', data: trueRangeRatios, smooth: true, lineStyle: { width: 2, color: trColors['真实波幅比率(%)'] }, yAxisIndex: 0 }
             ]
         };
 
@@ -390,7 +381,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const startIndex = Math.floor(rawData.length * dataZoom.start / 100);
                                 const endIndex = Math.ceil(rawData.length * dataZoom.end / 100) - 1;
                                 
-                                const visibleData = dailyTR.slice(startIndex, endIndex + 1).filter(v => v !== '-');
+                                const visibleData = trueRangeRatios.slice(startIndex, endIndex + 1).filter(v => v !== '-');
                                 if (visibleData.length === 0) {
                                     return `${value} %`;
                                 }
@@ -565,6 +556,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 { 
                     scale: true, 
                     splitArea: { show: true },
+                    axisLabel: {
+                        formatter: function (value) {
+                            return value.toFixed(3);
+                        }
+                    },
                     max: value => {
                         const highestMark = Math.max(high20 || -Infinity, high60 || -Infinity);
                         if (highestMark === -Infinity) return value.max;
