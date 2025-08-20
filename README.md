@@ -1,12 +1,12 @@
-# Stock Volatility Viewer / 股票振幅查看器
+# Stock ATR（Average True Range) Viewer / 股票平均真实波幅查看器
 
 ## 简介
 
-本项目是一个股票/ETF振幅查看器。其主要目的是为了帮助使用者在进行股票网格交易时，通过观察历史振幅数据，来寻找和设定一个合适的网格交易间距，目前支持A股与台股。
+本项目是一个股票/ETF真实波幅查看器。其主要目的是为了帮助使用者在进行股票网格交易时，通过观察历史振幅数据，来寻找和设定一个合适的网格交易间距，目前支持A股与台股。
 
 ## Introduction
 
-This project is a stock/ETF volatility viewer. Its main purpose is to help users find and set suitable grid trading intervals by observing historical volatility data for stock grid trading strategies.
+This project is a stock/ETF  ATR（Average True Range) Viewer . Its main purpose is to help users find and set suitable grid trading intervals by observing historical volatility data for stock grid trading strategies.
 
 ## 功能
 *   输入股票或ETF代码，查询其近期振幅。
