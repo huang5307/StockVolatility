@@ -264,7 +264,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 2. Calculate Average True Range for display text
         const calculateAndDisplayAverageTrueRanges = (startIdx, endIdx) => {
-            if (rawData.length === 0) {
+            if (rawData.length === 0 || endIdx < 0 || endIdx >= rawData.length) {
                 averageAmplitudeContainer.style.display = 'none';
                 return;
             }
@@ -280,10 +280,19 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             });
 
-            const avgTR = trCount ? (trTotal / trCount).toFixed(3) : 'N/A';
+            const avgTR_unrounded = trCount ? (trTotal / trCount) : 0;
+            const avgTR_str = avgTR_unrounded.toFixed(3);
+
+            const lastClosePrice = rawData[endIdx].close;
+            const percentage = lastClosePrice ? ((parseFloat(avgTR_str) / lastClosePrice) * 100).toFixed(2) : 0;
+
+            let percentageText = '';
+            if (percentage > 0) {
+                percentageText = ` (${percentage}%)`;
+            }
 
             averageAmplitudeContainer.innerHTML = `
-                <span class="me-4"><strong>可视区域平均真实波幅:</strong> ${avgTR}</span>`;
+                <span class="me-4"><strong>可视区域平均真实波幅:</strong> ${avgTR_str}${percentageText}</span>`;
         };
 
         const trColors = {
