@@ -33,12 +33,16 @@ document.addEventListener('DOMContentLoaded', () => {
     
     const chartContainer = document.getElementById('chart-container');
     const klineChartContainer = document.getElementById('kline-chart-container');
+    const weeklyChartContainer = document.getElementById('weekly-chart-container');
     const amplitudeChart = echarts.init(chartContainer);
     const klineChart = echarts.init(klineChartContainer);
+    const weeklyAmplitudeChart = echarts.init(weeklyChartContainer);
 
     const analysisTitleContainer = document.getElementById('analysis-title-container');
     const averageAmplitudeContainer = document.getElementById('average-amplitude-container');
     const klineTitleContainer = document.getElementById('kline-title-container');
+    const weeklyAnalysisTitleContainer = document.getElementById('weekly-analysis-title-container');
+    const weeklyAverageAmplitudeContainer = document.getElementById('weekly-average-amplitude-container');
 
     const stockCodeList = document.getElementById('stock-code-list');
 
@@ -155,7 +159,8 @@ document.addEventListener('DOMContentLoaded', () => {
         event.preventDefault();
         amplitudeChart.showLoading();
         klineChart.showLoading();
-        [analysisTitleContainer, averageAmplitudeContainer, klineTitleContainer].forEach(c => c.style.display = 'none');
+        weeklyAmplitudeChart.showLoading();
+        [analysisTitleContainer, averageAmplitudeContainer, klineTitleContainer, weeklyAnalysisTitleContainer, weeklyAverageAmplitudeContainer].forEach(c => c.style.display = 'none');
 
         const stockCodeWithPossibleName = stockCodeInput.value.trim();
         const stockCode = stockCodeWithPossibleName.split(' ')[0];
@@ -198,7 +203,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (allData.length === 0) {
                 showStatus('在指定的时间范围内没有找到数据。', 'warning');
-                [amplitudeChart, klineChart].forEach(c => c.clear());
+                [amplitudeChart, klineChart, weeklyAmplitudeChart].forEach(c => c.clear());
             } else {
                 showStatus(`成功加载 ${allData.length} 条数据进行图表渲染。`, 'success');
                 renderCharts(allData, stockCode, stockName);
@@ -230,17 +235,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 showStatus(`网络和本地缓存查询均失败: ${dbError.message}`, 'danger');
             }
         } finally {
-            [amplitudeChart, klineChart].forEach(c => c.hideLoading());
+            [amplitudeChart, klineChart, weeklyAmplitudeChart].forEach(c => c.hideLoading());
         }
     };
 
     const renderCharts = (rawData, stockCode, stockName) => {
         renderTrueRangeChart(rawData, stockCode, stockName);
+        renderWeeklyTrueRangeChart(rawData, stockCode, stockName);
         renderKlineChart(rawData, stockCode, stockName);
     };
 
     const renderTrueRangeChart = (rawData, stockCode, stockName) => {
-        analysisTitleContainer.innerText = `${stockCode} - ${stockName} | 真实波幅比率与成交量分析`;
+        analysisTitleContainer.innerText = `${stockCode} - ${stockName} | 日真实波幅比率与成交量分析`;
         analysisTitleContainer.style.display = 'block';
 
         const dates = rawData.map(item => item.date);
@@ -408,6 +414,197 @@ document.addEventListener('DOMContentLoaded', () => {
 
         amplitudeChart.off('datazoom');
         amplitudeChart.on('datazoom', updateReadouts);
+        updateReadouts(); // Initial call
+    };
+
+    const renderWeeklyTrueRangeChart = (rawData, stockCode, stockName) => {
+        weeklyAnalysisTitleContainer.innerText = `${stockCode} - ${stockName} | 周真实波幅比率与成交量分析`;
+        weeklyAnalysisTitleContainer.style.display = 'block';
+
+        // Helper function to get the start of the week (Monday)
+        function getWeekStartDate(date) {
+            const d = new Date(date);
+            const day = d.getDay();
+            const diff = d.getDate() - day + (day === 0 ? -6 : 1); // adjust when day is sunday
+            d.setDate(diff);
+            return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+        }
+
+        // 1. Aggregate daily data into weekly data
+        const weeklyGroups = {};
+        rawData.forEach(item => {
+            const weekStartDate = getWeekStartDate(new Date(item.date));
+            const weekKey = weekStartDate.toISOString().slice(0, 10);
+            if (!weeklyGroups[weekKey]) {
+                weeklyGroups[weekKey] = [];
+            }
+            weeklyGroups[weekKey].push(item);
+        });
+
+        const weeklyData = Object.keys(weeklyGroups).map(weekKey => {
+            const weekData = weeklyGroups[weekKey];
+            const lastDay = weekData[weekData.length - 1];
+            return {
+                date: lastDay.date, // Use last day of the week as the representative date
+                open: weekData[0].open,
+                high: Math.max(...weekData.map(d => d.high)),
+                low: Math.min(...weekData.map(d => d.low)),
+                close: lastDay.close,
+                volume: weekData.reduce((sum, d) => sum + d.volume, 0)
+            };
+        });
+
+        // Sort weekly data by date
+        weeklyData.sort((a, b) => a.date.localeCompare(b.date));
+
+        const dates = weeklyData.map(item => item.date);
+        const volumes = weeklyData.map((item, index) => [index, item.volume, item.open > item.close ? -1 : 1]);
+
+        // 2. Calculate Weekly True Range and True Range Ratio
+        const trueRanges = weeklyData.map((item, i) => {
+            if (i === 0) return '-';
+            const high = item.high;
+            const low = item.low;
+            const prevClose = weeklyData[i - 1].close;
+            return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        });
+
+        const trueRangeRatios = weeklyData.map((item, i) => {
+            if (i === 0 || item.close == 0) return '-';
+            const tr = trueRanges[i];
+            if (tr === '-') return '-';
+            return ((tr / item.close) * 100).toFixed(2);
+        });
+
+        // 3. Calculate Average True Range for display text
+        const calculateAndDisplayAverageTrueRanges = (startIdx, endIdx) => {
+            if (weeklyData.length === 0 || endIdx < 0 || endIdx >= weeklyData.length) {
+                weeklyAverageAmplitudeContainer.style.display = 'none';
+                return;
+            }
+            weeklyAverageAmplitudeContainer.style.display = 'block';
+
+            const visibleTrueRanges = trueRanges.slice(startIdx, endIdx + 1);
+
+            let trTotal = 0, trCount = 0;
+            visibleTrueRanges.forEach(tr => {
+                if (tr !== '-') {
+                    trTotal += tr;
+                    trCount++;
+                }
+            });
+
+            const avgTR_unrounded = trCount ? (trTotal / trCount) : 0;
+            const avgTR_str = avgTR_unrounded.toFixed(3);
+
+            const lastClosePrice = weeklyData[endIdx].close;
+            const percentage = lastClosePrice ? ((parseFloat(avgTR_str) / lastClosePrice) * 100).toFixed(2) : 0;
+
+            let percentageText = '';
+            if (percentage > 0) {
+                percentageText = ` (${percentage}%)`;
+            }
+
+            weeklyAverageAmplitudeContainer.innerHTML = `
+                <span class="me-4"><strong>可视区域平均周真实波幅:</strong> ${avgTR_str}${percentageText}</span>`;
+        };
+
+        const trColors = {
+            '周真实波幅比率(%)': '#ff7f50'
+        };
+
+        const legendData = Object.keys(trColors).map(name => ({
+            name: name,
+            icon: 'rect',
+            itemStyle: { color: trColors[name] }
+        }));
+
+        const option = {
+            tooltip: {
+                trigger: 'axis',
+                axisPointer: { type: 'cross' },
+                formatter: (params) => {
+                    const dataIndex = params[0].dataIndex;
+                    const date = dates[dataIndex];
+                    const ratio = trueRangeRatios[dataIndex];
+                    const closePrice = weeklyData[dataIndex].close;
+                    const trueRange = trueRanges[dataIndex];
+
+                    if (ratio === '-') {
+                        return '';
+                    }
+
+                    let tooltipHtml = `${date}<br/>`;
+                    tooltipHtml += `${params[0].marker} ${params[0].seriesName}: <strong>${ratio}%</strong><br/>`;
+                    tooltipHtml += `周收盘价: ${closePrice}<br/>`;
+                    tooltipHtml += `周真实波幅: ${trueRange.toFixed(3)}`;
+
+                    return tooltipHtml;
+                }
+            },
+            legend: { data: legendData, top: 0, inactiveColor: '#777' },
+            grid: [
+                { left: '10%', right: '15%', top: '10%', height: '50%' },
+                { left: '10%', right: '15%', top: '65%', height: '15%' }
+            ],
+            xAxis: [
+                { type: 'category', data: dates, scale: true, boundaryGap: false, axisLine: { show: false }, splitLine: { show: false }, min: 'dataMin', max: 'dataMax' },
+                { type: 'category', gridIndex: 1, data: dates, scale: true, boundaryGap: false, axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { show: false }, min: 'dataMin', max: 'dataMax' }
+            ],
+            yAxis: [
+                {
+                    scale: true,
+                    splitArea: { show: false },
+                    axisLine: { show: false }
+                },
+                { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } }
+            ],
+            dataZoom: [
+                { type: 'inside', xAxisIndex: [0, 1], start: 80, end: 100 },
+                { show: true, xAxisIndex: [0, 1], type: 'slider', top: '85%', start: 80, end: 100 }
+            ],
+            series: [
+                { name: '周成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: (params) => (params.value[2] === 1 ? '#ef232a' : '#14b143') } },
+                { name: '周真实波幅比率(%)', type: 'line', data: trueRangeRatios, smooth: true, lineStyle: { width: 2, color: trColors['周真实波幅比率(%)'] }, yAxisIndex: 0 }
+            ]
+        };
+
+        weeklyAmplitudeChart.setOption(option, true);
+        
+        const updateReadouts = () => {
+            const dataZoom = weeklyAmplitudeChart.getOption().dataZoom[0];
+            const startIndex = Math.floor(weeklyData.length * dataZoom.start / 100);
+            const endIndex = Math.ceil(weeklyData.length * dataZoom.end / 100) - 1;
+            calculateAndDisplayAverageTrueRanges(startIndex, endIndex);
+            
+            // Force y-axis label refresh
+            weeklyAmplitudeChart.setOption({
+                yAxis: [
+                    {
+                        axisLabel: {
+                            formatter: (value) => {
+                                const dataZoom = weeklyAmplitudeChart.getOption().dataZoom[0];
+                                const startIndex = Math.floor(weeklyData.length * dataZoom.start / 100);
+                                const endIndex = Math.ceil(weeklyData.length * dataZoom.end / 100) - 1;
+                                
+                                const visibleData = trueRangeRatios.slice(startIndex, endIndex + 1).filter(v => v !== '-');
+                                if (visibleData.length === 0) {
+                                    return `${value} %`;
+                                }
+
+                                const countAbove = visibleData.filter(v => parseFloat(v) > value).length;
+                                const percentage = (countAbove / visibleData.length * 100).toFixed(2);
+                                
+                                return `${value} % (${percentage}%)`;
+                            }
+                        }
+                    }
+                ]
+            });
+        };
+
+        weeklyAmplitudeChart.off('datazoom');
+        weeklyAmplitudeChart.on('datazoom', updateReadouts);
         updateReadouts(); // Initial call
     };
 
@@ -617,22 +814,26 @@ document.addEventListener('DOMContentLoaded', () => {
     };
     
     // --- Event Listeners and Initialization ---
-    echarts.connect([amplitudeChart, klineChart]);
+    echarts.connect([amplitudeChart, klineChart, weeklyAmplitudeChart]);
 
     window.addEventListener('resize', () => {
         amplitudeChart.resize();
         klineChart.resize();
+        weeklyAmplitudeChart.resize();
     });
 
     document.querySelectorAll('#chart-tabs .nav-link').forEach(tabEl => {
         tabEl.addEventListener('shown.bs.tab', (event) => {
             amplitudeChart.resize();
             klineChart.resize();
+            weeklyAmplitudeChart.resize();
             
-            const isAnalysisTab = event.target.id === 'analysis-tab';
-            analysisTitleContainer.style.display = isAnalysisTab ? 'block' : 'none';
-            averageAmplitudeContainer.style.display = isAnalysisTab ? 'block' : 'none';
-            klineTitleContainer.style.display = isAnalysisTab ? 'none' : 'block';
+            const activeTabId = event.target.id;
+            analysisTitleContainer.style.display = activeTabId === 'analysis-tab' ? 'block' : 'none';
+            averageAmplitudeContainer.style.display = activeTabId === 'analysis-tab' ? 'block' : 'none';
+            klineTitleContainer.style.display = activeTabId === 'kline-tab' ? 'block' : 'none';
+            weeklyAnalysisTitleContainer.style.display = activeTabId === 'weekly-analysis-tab' ? 'block' : 'none';
+            weeklyAverageAmplitudeContainer.style.display = activeTabId === 'weekly-analysis-tab' ? 'block' : 'none';
         });
     });
 

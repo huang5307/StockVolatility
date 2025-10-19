@@ -50,7 +50,10 @@
                 <button class="nav-link active" id="kline-tab" data-bs-toggle="tab" data-bs-target="#kline-panel" type="button" role="tab">K线图</button>
             </li>
             <li class="nav-item" role="presentation">
-                <button class="nav-link" id="analysis-tab" data-bs-toggle="tab" data-bs-target="#analysis-panel" type="button" role="tab">真实波幅分析</button>
+                <button class="nav-link" id="analysis-tab" data-bs-toggle="tab" data-bs-target="#analysis-panel" type="button" role="tab">日真实波幅分析</button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="weekly-analysis-tab" data-bs-toggle="tab" data-bs-target="#weekly-analysis-panel" type="button" role="tab">周真实波幅分析</button>
             </li>
         </ul>
 
@@ -59,6 +62,11 @@
                 <div id="analysis-title-container" class="text-center h5 p-2" style="display: none;"></div>
                 <div id="average-amplitude-container" class="text-center mb-2 p-2 bg-light rounded" style="display: none;"></div>
                 <div id="chart-container"></div>
+            </div>
+            <div class="tab-pane fade" id="weekly-analysis-panel" role="tabpanel">
+                <div id="weekly-analysis-title-container" class="text-center h5 p-2" style="display: none;"></div>
+                <div id="weekly-average-amplitude-container" class="text-center mb-2 p-2 bg-light rounded" style="display: none;"></div>
+                <div id="weekly-chart-container"></div>
             </div>
             <div class="tab-pane fade show active" id="kline-panel" role="tabpanel">
                 <div id="kline-title-container" class="text-center h5 p-2" style="display: none;"></div>
