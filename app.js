@@ -89,9 +89,9 @@ document.addEventListener('DOMContentLoaded', () => {
         history = history.filter(item => item.code !== code);
         // Add new entry to the front
         history.unshift({ code, name });
-        // Keep only the last 10 entries
-        if (history.length > 10) {
-            history = history.slice(0, 10);
+        // Keep only the last 20 entries
+        if (history.length > 20) {
+            history = history.slice(0, 20);
         }
         localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(history));
         // Reload the datalist to show the new history
