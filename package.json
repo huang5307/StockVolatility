@@ -3,14 +3,22 @@
   "version": "1.0.0",
   "description": "A local server to fetch stock data and avoid CORS issues.",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "npx wrangler pages dev .",
+    "db:migrate:local": "npx wrangler d1 execute stock-volatility-db --local --file=./migrations/0000_init.sql",
+    "db:migrate:remote": "npx wrangler d1 execute stock-volatility-db --remote --file=./migrations/0000_init.sql",
+    "test": "node test/backtest.test.js"
   },
   "dependencies": {
     "axios": "^1.7.2",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "iconv-lite": "^0.6.3",
-    "node-fetch": "^2.7.0"
+    "sqlite3": "^5.1.6"
+  },
+  "devDependencies": {
+    "wrangler": "^3.100.0"
   }
 }

@@ -1,5 +1,9 @@
+# Cloudflare Wrangler
+.wrangler/
+
 # Logs
 logs
+
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -140,3 +144,8 @@ vite.config.ts.timestamp-*
 
 # OS-generated files
 desktop.ini
+
+# Local temporary and test files
+backtests.json
+test.txt
+testRun.js

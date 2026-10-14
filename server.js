@@ -1,3 +1,4 @@
+const db = require('./db');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -44,7 +45,7 @@ async function getSinaName(symbol) {
     const sinaSymbol = getSinaSymbol(symbol);
     const url = `http://hq.sinajs.cn/list=${sinaSymbol}`;
     console.log(`Fetching name from: ${url}`);
-    const responseText = await fetchData(url, { 
+    const responseText = await fetchData(url, {
         headers: SINA_HEADERS,
         responseType: 'arraybuffer',
         transformResponse: [data => iconv.decode(data, 'gb2312')]
@@ -71,30 +72,16 @@ async function getFinMindName(symbol) {
 }
 
 async function getKLineData(symbol) {
-    const sinaSymbol = getSinaSymbol(symbol);
-    let url;
-    // A-share stocks use one API
-    if (/^[603]/.test(symbol)) { 
-        url = `https://finance.sina.com.cn/realstock/newstock/klc_kl.php?symbol=${sinaSymbol}&type=day`;
-    } else { // Funds/ETFs use another
-        url = `http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${sinaSymbol}&scale=240&ma=no&datalen=1023`;
-    }
-    
+    const sinaSymbol = getSinaSymbol(symbol);   // 已经带上 sh/ sz 前缀
+    // 统一使用 sina 的 json_v2 接口（适用于沪深 A‑股）
+    const url = `http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol=${sinaSymbol}&scale=240&ma=no&datalen=1023`;
+
     console.log(`Fetching K-line data from: ${url}`);
     const responseData = await fetchData(url, { headers: SINA_HEADERS });
 
-    let klineData;
-    if (typeof responseData === 'string' && responseData.includes('klc_kl')) {
-        const match = responseData.match(/(\[.*?\])/);
-        if (match && match[1]) {
-            klineData = JSON.parse(match[1].replace(/\\/g, ''));
-        }
-    } else if (Array.isArray(responseData)) {
-        klineData = responseData;
-    }
-
-    if (klineData) {
-        return klineData.map(item => ({
+    // sina 返回的是一个数组，每项包含 day, open, high, low, close, volume 等字段
+    if (Array.isArray(responseData)) {
+        return responseData.map(item => ({
             date: item.day || item.date,
             open: parseFloat(item.open),
             high: parseFloat(item.high),
@@ -102,6 +89,25 @@ async function getKLineData(symbol) {
             close: parseFloat(item.close),
             volume: parseInt(item.volume, 10)
         }));
+    }
+    // 兜底：如果意外返回了字符串（极少见），尝试提取 JSON 数组
+    if (typeof responseData === 'string' && responseData.includes('[')) {
+        const match = responseData.match(/(\[.*?\])/);
+        if (match) {
+            try {
+                const arr = JSON.parse(match[1].replace(/\\/g, ''));
+                return arr.map(item => ({
+                    date: item.day || item.date,
+                    open: parseFloat(item.open),
+                    high: parseFloat(item.high),
+                    low: parseFloat(item.low),
+                    close: parseFloat(item.close),
+                    volume: parseInt(item.volume, 10)
+                }));
+            } catch (_) {
+                // 继续抛出错误
+            }
+        }
     }
     throw new Error(`Could not parse K-line data for ${symbol}. Response was not in expected format.`);
 }
@@ -158,7 +164,7 @@ app.get('/api/kline', async (req, res) => {
         } else { // A-share Stocks and Funds
             klinePromise = getKLineData(symbol);
             namePromise = getSinaName(symbol);
-        } 
+        }
         const [kline, name] = await Promise.all([klinePromise, namePromise]);
         res.json({ name, kline });
     } catch (error) {
@@ -169,6 +175,78 @@ app.get('/api/kline', async (req, res) => {
 
 // --- Server Initialization ---
 
+
+let runBacktest;
+async function getRunBacktest() {
+    if (!runBacktest) {
+        const mod = await import('./functions/_shared/backtestEngine.js');
+        runBacktest = mod.runBacktest;
+    }
+    return runBacktest;
+}
+
+
+app.get('/api/backtest', async (req, res) => {
+    const { symbol, startDate, endDate, gridSize, initialCapital, lowerPrice, upperPrice } = req.query;
+
+    // 参数校验（最小校验，细节可自行扩展）
+    if (!symbol || !startDate || !endDate || !gridSize || !initialCapital) {
+        return res.status(400).json({ error: 'Missing required query parameters' });
+    }
+
+    const opts = {
+        gridSize: parseInt(gridSize, 10),
+        lowerPrice: lowerPrice !== undefined ? parseFloat(lowerPrice) : undefined,
+        upperPrice: upperPrice !== undefined ? parseFloat(upperPrice) : undefined,
+        initialCapital: parseFloat(initialCapital)
+    };
+
+    try {
+        // 根据 symbol 判断是 A‑股还是台湾股
+        let kline;
+        if (/^\\d{4}$/.test(symbol) || /^00\\d{2,4}[A-Z]?$/.test(symbol)) {
+            // 台湾股票或 ETF
+            kline = await getFinMindData(symbol);
+        } else {
+            // A‑股
+            kline = await getKLineData(symbol);
+        }
+
+        // 过滤出用户请求的时间范围
+        const filtered = kline.filter(p => p.date >= startDate && p.date <= endDate);
+        if (filtered.length === 0) {
+            return res.status(404).json({ error: 'No K‑line data in the given date range' });
+        }
+
+        const runBt = await getRunBacktest();
+        const result = runBt(filtered, opts);
+
+        // 保存到 SQLite
+        const dbRecord = {
+            symbol,
+            startDate,
+            endDate,
+            gridSize: opts.gridSize,
+            lowerPrice: opts.lowerPrice ?? null,
+            upperPrice: opts.upperPrice ?? null,
+            initialCapital: opts.initialCapital,
+            finalEquity: result.finalEquity,
+            totalTrades: result.totalTrades,
+            winRate: result.winRate,
+            maxDrawdown: result.maxDrawdown
+        };
+        db.saveBacktest(dbRecord, (err, id) => {
+            if (err) {
+                console.error('Failed to save backtest record:', err);
+            }
+        });
+
+        res.json({ summary: dbRecord, trades: result.tradeRecords });
+    } catch (e) {
+        console.error('Backtest error:', e);
+        res.status(500).json({ error: e.message });
+    }
+});
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
     console.log('Ready to accept requests.');
@@ -177,3 +255,7 @@ app.listen(port, () => {
 app.get('/', (req, res) => {
     res.send('Stock data proxy server is running.');
 });
+
+
+module.exports = { getRunBacktest, app };
+

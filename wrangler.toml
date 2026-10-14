@@ -1,0 +1,13 @@
+name = "stock-volatility"
+compatibility_date = "2024-04-01"
+pages_build_output_dir = "."
+
+[[d1_databases]]
+binding = "STOCK_DB"
+database_name = "stock-volatility-db"
+database_id = "0d105c68-5514-41bb-9236-35f4b88387dc"
+
+[[kv_namespaces]]
+binding = "STOCK_CACHE"
+id = "9a7d5f1a02cd49d0a5a3f182d76728b5"
+
