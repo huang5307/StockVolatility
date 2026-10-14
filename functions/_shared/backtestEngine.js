@@ -2,9 +2,9 @@
  * 網格交易（蛛網交易）量化回測與參數尋優引擎
  * 券商實盤正統等比網格線 (Geometric Grid Lines) 撮合系統：
  * - 依跳動間距 (%) 在價格區間內鋪設標準蛛網
+ * - 一買配一賣專屬配對撮合（Paired Grid Arbitrage）：低買高賣，徹底根除低檔割肉
  * - 支援盤中 High / Low 真實穿網撮合，精準捕捉震盪套利
- * - 首日自動建立起始底倉（避免單邊上漲時空倉無法參與）
- * - 嚴格遵守原始庫存、最大庫存上限、最小底倉保留風控
+ * - 嚴格區分「網格波動套利純利潤」與「未平倉市值浮動盈虧」
  */
 
 export function isTaiwanStock(symbol) {
@@ -51,12 +51,11 @@ export function runBacktest(kline, opts = {}) {
         ? Math.max(lowerPrice * 1.05, Number(opts.upperPrice))
         : Number((maxHistoryPrice * 1.08).toFixed(2));
 
-    // 若設定的價格區間完全脫離標的歷史真實波動範圍（例如殘留了上一檔低價股的上下限），自動校正為合規區間
+    // 若設定的價格區間完全脫離標的歷史真實波動範圍，自動校正為合規區間
     if (upperPrice <= minHistoryPrice || lowerPrice >= maxHistoryPrice) {
         lowerPrice = Number((minHistoryPrice * 0.92).toFixed(2));
         upperPrice = Number((maxHistoryPrice * 1.08).toFixed(2));
     }
-
 
     // 生成等比蛛網網格線 (Geometric Grid Lines)
     const ratio = gridPercent / 100;
@@ -98,13 +97,13 @@ export function runBacktest(kline, opts = {}) {
     const initialStockValue = currentShares * initialPrice;
     const totalInitialEquity = cash + initialStockValue;
 
-    // 未平倉買單池 (FIFO)
-    const buyQueue = [];
+    // 未平倉網格持倉單池 (專屬配對撮合)
+    const openPositions = [];
     if (currentStockUnits > 0) {
-        buyQueue.push({
+        openPositions.push({
             id: 0,
             date: kline[0].date,
-            price: initialPrice,
+            buyPrice: initialPrice,
             shares: currentShares,
             units: currentStockUnits,
             note: autoBase ? '首日建立底倉' : '原始庫存底倉'
@@ -119,6 +118,10 @@ export function runBacktest(kline, opts = {}) {
     let closedTrades = 0;
     let tradeId = 1;
 
+    let realizedProfit = 0; // 累計網格波動套利純利潤 ($)
+    let currentCapitalDeployed = currentStockUnits * sharesPerTrade > 0 ? currentShares * initialPrice : 0;
+    let maxCapitalDeployed = currentCapitalDeployed > 0 ? currentCapitalDeployed : sharesPerTrade * initialPrice;
+
     // 記錄第 0 天權益
     equityCurve.push({
         date: kline[0].date,
@@ -127,14 +130,14 @@ export function runBacktest(kline, opts = {}) {
         cash: Number(cash.toFixed(2)),
         stockUnits: currentStockUnits,
         stockValue: Number(initialStockValue.toFixed(2)),
-        close: initialPrice
+        close: initialPrice,
+        realizedProfit: 0
     });
 
     let prevClose = initialPrice;
 
     for (let i = 1; i < kline.length; i++) {
         const item = kline[i];
-        const dayOpen = Number(item.open || item.close);
         const dayHigh = Number(item.high || item.close);
         const dayLow = Number(item.low || item.close);
         const dayClose = Number(item.close);
@@ -152,14 +155,19 @@ export function runBacktest(kline, opts = {}) {
                         currentStockUnits += orderQuantityUnits;
                         currentShares += sharesPerTrade;
 
-                        buyQueue.push({
+                        openPositions.push({
                             id: tradeId++,
                             date: curDate,
-                            price: line,
+                            buyPrice: line,
                             shares: sharesPerTrade,
                             units: orderQuantityUnits,
                             gridLine: line
                         });
+
+                        currentCapitalDeployed += buyCost;
+                        if (currentCapitalDeployed > maxCapitalDeployed) {
+                            maxCapitalDeployed = currentCapitalDeployed;
+                        }
 
                         tradeRecords.push({
                             type: 'buy',
@@ -178,40 +186,55 @@ export function runBacktest(kline, opts = {}) {
             }
         }
 
-        // --- 2. 逢漲觸網賣出判斷 (High 漲破某一網格線) ---
+        // --- 2. 逢漲觸網賣出判斷 (High 漲破某一網格線 - 專屬配對撮合) ---
         for (let g = 0; g < gridLines.length; g++) {
             const line = gridLines[g];
             // 當日向上穿過該網格線，且前一日收盤低於該網格線
             if (dayHigh >= line && prevClose < line) {
-                if (currentStockUnits - orderQuantityUnits >= minStockUnits && buyQueue.length > 0 && line <= upperPrice) {
-                    // FIFO 匹配買單獲利平倉
-                    const matchedBuy = buyQueue.shift();
-                    const sellShares = Math.min(currentShares, sharesPerTrade);
-                    const revenue = sellShares * line;
+                if (currentStockUnits - orderQuantityUnits >= minStockUnits && openPositions.length > 0 && line <= upperPrice) {
+                    // 正統網格配對：尋找買入價低於當前賣出價 (buyPrice < line) 的持倉單，優先配對買入價最接近且低於本檔的持倉（低買高賣獲利平倉）
+                    let bestIdx = -1;
+                    let maxBuyBelow = -1;
+                    for (let p = 0; p < openPositions.length; p++) {
+                        if (openPositions[p].buyPrice < line) {
+                            if (openPositions[p].buyPrice > maxBuyBelow) {
+                                maxBuyBelow = openPositions[p].buyPrice;
+                                bestIdx = p;
+                            }
+                        }
+                    }
 
-                    cash += revenue;
-                    currentStockUnits -= orderQuantityUnits;
-                    currentShares -= sellShares;
-                    closedTrades++;
+                    if (bestIdx !== -1) {
+                        const matchedBuy = openPositions.splice(bestIdx, 1)[0];
+                        const sellShares = Math.min(currentShares, sharesPerTrade);
+                        const revenue = sellShares * line;
 
-                    const pnl = (line - matchedBuy.price) * sellShares;
-                    if (pnl > 0) winTrades++;
+                        cash += revenue;
+                        currentStockUnits -= orderQuantityUnits;
+                        currentShares -= sellShares;
+                        currentCapitalDeployed = Math.max(0, currentCapitalDeployed - sellShares * matchedBuy.buyPrice);
+                        closedTrades++;
 
-                    tradeRecords.push({
-                        type: 'sell',
-                        price: line,
-                        units: orderQuantityUnits,
-                        unitName: unitInfo.unitName,
-                        shares: sellShares,
-                        date: curDate,
-                        amount: Number(revenue.toFixed(2)),
-                        pnl: Number(pnl.toFixed(2)),
-                        buyPrice: matchedBuy.price,
-                        buyDate: matchedBuy.date,
-                        currentStockUnits,
-                        note: `突破蛛網線 $${line.toFixed(2)} 賣出 ${orderQuantityUnits} ${unitInfo.unitName} (配對買入: $${matchedBuy.price.toFixed(2)})`
-                    });
-                    break; // 當天只觸發一次賣出
+                        const pnl = (line - matchedBuy.buyPrice) * sellShares;
+                        realizedProfit += pnl;
+                        if (pnl > 0) winTrades++;
+
+                        tradeRecords.push({
+                            type: 'sell',
+                            price: line,
+                            units: orderQuantityUnits,
+                            unitName: unitInfo.unitName,
+                            shares: sellShares,
+                            date: curDate,
+                            amount: Number(revenue.toFixed(2)),
+                            pnl: Number(pnl.toFixed(2)),
+                            buyPrice: matchedBuy.buyPrice,
+                            buyDate: matchedBuy.date,
+                            currentStockUnits,
+                            note: `突破蛛網線 $${line.toFixed(2)} 賣出 ${orderQuantityUnits} ${unitInfo.unitName} (低吸高拋配對: $${matchedBuy.buyPrice.toFixed(2)}, 套利 +$${Math.round(pnl).toLocaleString()})`
+                        });
+                        break; // 當天只觸發一次賣出
+                    }
                 }
             }
         }
@@ -238,18 +261,30 @@ export function runBacktest(kline, opts = {}) {
             cash: Number(cash.toFixed(2)),
             stockUnits: currentStockUnits,
             stockValue: Number(currentStockValue.toFixed(2)),
-            close: dayClose
+            close: dayClose,
+            realizedProfit: Number(realizedProfit.toFixed(2))
         });
     }
 
-    // 期末最終權益結算
+    // 期末持倉浮動損益結算
     const finalClosePrice = Number(kline[kline.length - 1].close);
     const finalStockValue = currentShares * finalClosePrice;
     const finalEquity = cash + finalStockValue;
+    
+    // 剩餘持倉浮動盈虧 = 剩餘持股市值 - 剩餘持股買入成本
+    const remainingCost = openPositions.reduce((sum, pos) => sum + pos.shares * pos.buyPrice, 0);
+    const unrealizedProfit = finalStockValue - remainingCost;
+
+    // 網格波動套利純報酬率 = 累計純套利利潤 / 網格最大動用資金
+    const safeMaxCapital = Math.max(1000, maxCapitalDeployed);
+    const gridReturn = realizedProfit / safeMaxCapital;
+
+    // 總資產淨值報酬率 = (期末總資產 - 期初總資產) / 期初總資產
     const totalReturn = (finalEquity - totalInitialEquity) / totalInitialEquity;
 
     const days = Math.max(1, (new Date(kline[kline.length - 1].date) - new Date(kline[0].date)) / (1000 * 86400));
-    const annualizedReturn = days > 30 ? Math.pow(1 + totalReturn, 365 / days) - 1 : totalReturn;
+    const annualizedGridReturn = days > 30 ? Math.pow(1 + Math.max(-0.99, gridReturn), 365 / days) - 1 : gridReturn;
+    const annualizedReturn = days > 30 ? Math.pow(1 + Math.max(-0.99, totalReturn), 365 / days) - 1 : totalReturn;
     const winRate = closedTrades > 0 ? winTrades / closedTrades : 0;
 
     return {
@@ -266,12 +301,25 @@ export function runBacktest(kline, opts = {}) {
             totalInitialEquity: Number(totalInitialEquity.toFixed(2)),
             gridLinesCount: gridLines.length
         },
-        finalEquity: Number(finalEquity.toFixed(2)),
+        // 核心網格套利純收益指標（專注波動盈利）
+        realizedProfit: Number(realizedProfit.toFixed(2)),
+        maxCapitalDeployed: Number(safeMaxCapital.toFixed(2)),
+        gridReturn: Number(gridReturn.toFixed(4)),
+        annualizedGridReturn: Number(annualizedGridReturn.toFixed(4)),
+
+        // 期末持倉與浮動市值指標（未平倉持股）
+        unrealizedProfit: Number(unrealizedProfit.toFixed(2)),
         finalStockUnits: currentStockUnits,
+        finalStockValue: Number(finalStockValue.toFixed(2)),
         finalCash: Number(cash.toFixed(2)),
+
+        // 總資產權益指標
+        finalEquity: Number(finalEquity.toFixed(2)),
         totalReturn: Number(totalReturn.toFixed(4)),
         annualizedReturn: Number(annualizedReturn.toFixed(4)),
         maxDrawdown: Number(maxDrawdown.toFixed(4)),
+
+        // 成交統計
         winRate: Number(winRate.toFixed(4)),
         totalTrades: tradeRecords.length,
         closedTrades,
@@ -283,6 +331,7 @@ export function runBacktest(kline, opts = {}) {
 
 /**
  * 網格參數智能尋優函數 (Grid Parameter Optimizer)
+ * 依據「網格波動套利純收益」尋找賺取最多波動現金的甜蜜點
  */
 export function optimizeGrid(kline, baseOpts = {}) {
     if (!kline || kline.length < 2) {
@@ -310,6 +359,12 @@ export function optimizeGrid(kline, baseOpts = {}) {
             const res = runBacktest(kline, { ...baseOpts, gridPercent: pct });
             scanResults.push({
                 gridPercent: pct,
+                realizedProfit: res.realizedProfit,
+                gridReturn: res.gridReturn,
+                annualizedGridReturn: res.annualizedGridReturn,
+                maxCapitalDeployed: res.maxCapitalDeployed,
+                unrealizedProfit: res.unrealizedProfit,
+                finalStockUnits: res.finalStockUnits,
                 totalReturn: res.totalReturn,
                 annualizedReturn: res.annualizedReturn,
                 maxDrawdown: res.maxDrawdown,
@@ -327,13 +382,13 @@ export function optimizeGrid(kline, baseOpts = {}) {
         throw new Error('參數尋優未能產生有效結果');
     }
 
-    // 1. 最高報酬率配置
-    const bestReturnConfig = [...scanResults].sort((a, b) => b.totalReturn - a.totalReturn)[0];
+    // 1. 最高波動套利收益配置 (賺取最多波動純利潤)
+    const bestReturnConfig = [...scanResults].sort((a, b) => b.realizedProfit - a.realizedProfit)[0];
 
-    // 2. 最穩健配置 (風報比)
+    // 2. 最穩健配置 (套利報酬 / 最大回撤 風報比最高)
     const bestBalancedConfig = [...scanResults].sort((a, b) => {
-        const scoreA = a.totalReturn / Math.max(0.01, a.maxDrawdown);
-        const scoreB = b.totalReturn / Math.max(0.01, b.maxDrawdown);
+        const scoreA = a.gridReturn / Math.max(0.01, a.maxDrawdown);
+        const scoreB = b.gridReturn / Math.max(0.01, b.maxDrawdown);
         return scoreB - scoreA;
     })[0];
 
@@ -349,6 +404,6 @@ export function optimizeGrid(kline, baseOpts = {}) {
             bestBalanced: bestBalancedConfig,
             atrRecommendedPercent: recommendedAtrPct
         },
-        ranking: scanResults.sort((a, b) => b.totalReturn - a.totalReturn)
+        ranking: scanResults.sort((a, b) => b.realizedProfit - a.realizedProfit)
     };
 }

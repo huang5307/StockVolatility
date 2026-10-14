@@ -144,11 +144,12 @@
                                     <thead class="table-light sticky-top">
                                         <tr>
                                             <th>跳動間距 (%)</th>
-                                            <th>總報酬率</th>
-                                            <th>年化報酬率</th>
-                                            <th>最大回撤</th>
+                                            <th>波動套利純獲利 ($)</th>
+                                            <th>套利報酬率 (%)</th>
+                                            <th>平倉套利筆數</th>
                                             <th>勝率</th>
-                                            <th>完成筆數</th>
+                                            <th>最大佔用本金</th>
+                                            <th>期末持倉</th>
                                             <th>操作</th>
                                         </tr>
                                     </thead>
@@ -215,39 +216,45 @@
                 <div id="backtest-summary-container" style="display: none;" class="mb-4">
                     <div class="row g-3">
                         <div class="col-6 col-md-3">
-                            <div class="metric-card">
-                                <div class="metric-title">初始總權益 / 期末總權益</div>
-                                <div class="metric-value fs-5" id="res-equity-compare">-- / --</div>
+                            <div class="metric-card border-start border-4 border-success">
+                                <div class="metric-title text-success fw-bold">💰 網格波動套利純獲利</div>
+                                <div class="metric-value text-profit fs-4" id="res-grid-profit">--</div>
+                                <small class="text-muted" id="res-grid-return">套利報酬: --</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-2">
                             <div class="metric-card">
-                                <div class="metric-title">策略總報酬率</div>
-                                <div class="metric-value" id="res-total-return">--</div>
+                                <div class="metric-title">平倉套利 / 總成交</div>
+                                <div class="metric-value text-primary fs-5" id="res-total-trades">--</div>
+                                <small class="text-success fw-semibold" id="res-win-rate">勝率: 100%</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-2">
                             <div class="metric-card">
-                                <div class="metric-title">年化報酬率</div>
-                                <div class="metric-value" id="res-annual-return">--</div>
+                                <div class="metric-title">剩餘持倉 / 浮動盈虧</div>
+                                <div class="metric-value fs-5" id="res-unrealized-profit">--</div>
+                                <small class="text-muted" id="res-final-stocks">剩餘持股: --</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-2">
                             <div class="metric-card">
-                                <div class="metric-title">最大回撤 / 回檔</div>
-                                <div class="metric-value text-muted" id="res-max-drawdown">--</div>
+                                <div class="metric-title">網格最大佔用本金</div>
+                                <div class="metric-value text-secondary fs-5" id="res-max-capital">--</div>
+                                <small class="text-muted">實際動用資金峰值</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-1">
                             <div class="metric-card">
-                                <div class="metric-title">勝率</div>
-                                <div class="metric-value" id="res-win-rate">--</div>
+                                <div class="metric-title">最大回撤</div>
+                                <div class="metric-value text-muted fs-5" id="res-max-drawdown">--</div>
+                                <small class="text-muted">歷史浮動</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-2">
                             <div class="metric-card">
-                                <div class="metric-title">總交易 / 平倉筆數</div>
-                                <div class="metric-value text-secondary fs-6" id="res-total-trades">--</div>
+                                <div class="metric-title">全組合期末總權益</div>
+                                <div class="metric-value text-secondary fs-6" id="res-equity-compare">--</div>
+                                <small class="text-muted" id="res-total-return">總資產變化: --</small>
                             </div>
                         </div>
                     </div>
