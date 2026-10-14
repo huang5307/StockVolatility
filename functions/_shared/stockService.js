@@ -46,7 +46,7 @@ export async function getStockName(symbol, env) {
 
     let name = symbol;
     if (isTaiwanStock(symbol)) {
-        name = await fetchFinMindName(symbol);
+        name = await fetchFinMindName(symbol, env);
     } else {
         // 先尝试新浪，失败降级到腾讯
         try {
@@ -87,7 +87,7 @@ export async function getKLine(symbol, env) {
 
     let klineData;
     if (isTaiwanStock(symbol)) {
-        klineData = await fetchFinMindKLine(symbol);
+        klineData = await fetchFinMindKLine(symbol, env);
     } else {
         klineData = await fetchSinaKLine(symbol);
     }
@@ -106,8 +106,10 @@ export async function getKLine(symbol, env) {
 
 // --- 内部获取逻辑 ---
 
-async function fetchFinMindName(symbol) {
-    const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${symbol}`;
+async function fetchFinMindName(symbol, env) {
+    const token = env?.FINMIND_TOKEN;
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+    const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${symbol}${tokenParam}`;
     const res = await fetch(url);
     if (!res.ok) throw new Error(`FinMind API returned status ${res.status}`);
     const data = await res.json();
@@ -149,10 +151,17 @@ async function fetchTencentName(symbol) {
     return symbol;
 }
 
-async function fetchFinMindKLine(symbol) {
-    const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=2020-01-01`;
+async function fetchFinMindKLine(symbol, env) {
+    const token = env?.FINMIND_TOKEN;
+    const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+    const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=2020-01-01${tokenParam}`;
     const res = await fetch(url);
-    if (!res.ok) throw new Error(`FinMind API returned status ${res.status}`);
+    if (!res.ok) {
+        if (res.status === 402) {
+            throw new Error(`FinMind 匿名公共請求額度已耗盡 (HTTP 402)。由於 Cloudflare 雲端共用公共出口 IP，請在 Cloudflare Pages 後台（Settings -> 變量和密鑰）中新增變數 FINMIND_TOKEN（至 finmindtrade.com 免費註冊即可取得），即可享受每小時 600 次專屬獨立額度。`);
+        }
+        throw new Error(`FinMind API returned status ${res.status}`);
+    }
     const json = await res.json();
     if (json.data && json.data.length > 0) {
         return json.data.map(item => ({
@@ -164,8 +173,9 @@ async function fetchFinMindKLine(symbol) {
             volume: Number(item.Trading_Volume)
         }));
     }
-    throw new Error(`FinMind 没有返回 ${symbol} 的 K 线数据`);
+    throw new Error(`FinMind 沒有返回 ${symbol} 的 K 線數據`);
 }
+
 
 async function fetchSinaKLine(symbol) {
     const sinaSymbol = getSinaSymbol(symbol);
