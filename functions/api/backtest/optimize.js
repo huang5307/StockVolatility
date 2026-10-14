@@ -34,10 +34,17 @@ export async function onRequest(context) {
     }
 
     try {
-        const [name, allKline] = await Promise.all([
-            getStockName(symbol, env),
-            getKLine(symbol, env)
-        ]);
+        let allKline = Array.isArray(params.kline) && params.kline.length > 0 ? params.kline : null;
+        let name = params.stockName || null;
+
+        if (!allKline || !name) {
+            const [fetchedName, fetchedKline] = await Promise.all([
+                name ? Promise.resolve(name) : getStockName(symbol, env),
+                allKline ? Promise.resolve(allKline) : getKLine(symbol, env)
+            ]);
+            name = fetchedName;
+            allKline = fetchedKline;
+        }
 
         if (!Array.isArray(allKline) || allKline.length === 0) {
             return Response.json({ error: '查無歷史K線數據' }, { status: 404 });

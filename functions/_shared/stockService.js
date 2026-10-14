@@ -46,7 +46,12 @@ export async function getStockName(symbol, env) {
 
     let name = symbol;
     if (isTaiwanStock(symbol)) {
-        name = await fetchFinMindName(symbol, env);
+        try {
+            name = await fetchFinMindName(symbol, env);
+        } catch (e) {
+            console.warn(`FinMind name fetch failed for ${symbol}:`, e.message);
+            name = symbol;
+        }
     } else {
         // 先尝试新浪，失败降级到腾讯
         try {
@@ -94,8 +99,8 @@ export async function getKLine(symbol, env) {
 
     if (env?.STOCK_CACHE && Array.isArray(klineData) && klineData.length > 0) {
         try {
-            // 缓存 30 分钟 (1800 秒)
-            await env.STOCK_CACHE.put(cacheKey, JSON.stringify(klineData), { expirationTtl: 1800 });
+            // 缓存 4 小时 (14400 秒)，大幅节省 FinMind API 配额
+            await env.STOCK_CACHE.put(cacheKey, JSON.stringify(klineData), { expirationTtl: 14400 });
         } catch (e) {
             console.warn('KV write error for kline:', e);
         }
@@ -169,10 +174,15 @@ async function fetchFinMindKLine(symbol, env) {
     }
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
     const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=2020-01-01${tokenParam}`;
-    const res = await fetch(url, { headers });
+    let res = await fetch(url, { headers });
+    // 若遇到 402 或 429 瞬時流控，延遲 800ms 重試一次，避開 Cloudflare 多請求併發瞬時限流
+    if (res.status === 402 || res.status === 429) {
+        await new Promise(resolve => setTimeout(resolve, 800));
+        res = await fetch(url, { headers });
+    }
     if (!res.ok) {
         if (res.status === 402) {
-            throw new Error(`FinMind API 回應 402（額度已達上限或 Token 未生效）。請確認 Cloudflare Pages 的 FINMIND_TOKEN 已設定並觸發新部署。`);
+            throw new Error(`FinMind API 回應 402（額度已達上限或 Token 尚未生效）。若剛在 Cloudflare 設定 FINMIND_TOKEN，需觸發新部署生效；亦可稍候每小時配額重置。`);
         }
         throw new Error(`FinMind API returned status ${res.status}`);
     }

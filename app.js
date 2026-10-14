@@ -720,6 +720,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentLoadedStock = {
             code,
             name,
+            kline: data,
             minPrice,
             maxPrice,
             lastClose,
@@ -757,6 +758,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const params = {
             symbol: stockCode,
+            stockName: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.name : undefined,
+            kline: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.kline : undefined,
             startDate: startDateInput.value || '',
             endDate: endDateInput.value || '',
             orderQuantity: btOrderQuantity.value || 1,
@@ -947,6 +950,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const params = {
             symbol: stockCode,
+            stockName: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.name : undefined,
+            kline: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.kline : undefined,
             startDate: startDateInput.value || '',
             endDate: endDateInput.value || '',
             gridPercent: btGridPercent.value,
