@@ -42,14 +42,21 @@ export function runBacktest(kline, opts = {}) {
     const orderQuantityUnits = Math.max(1, parseInt(opts.orderQuantity || 1, 10));
     const sharesPerTrade = orderQuantityUnits * multiplier;
 
-    // 價格區間設定
-    const lowerPrice = opts.lowerPrice !== undefined && opts.lowerPrice !== '' && !isNaN(opts.lowerPrice)
+    // 價格區間設定與防呆校驗
+    let lowerPrice = opts.lowerPrice !== undefined && opts.lowerPrice !== '' && !isNaN(opts.lowerPrice)
         ? Math.max(0.01, Number(opts.lowerPrice))
         : Number((minHistoryPrice * 0.92).toFixed(2));
 
-    const upperPrice = opts.upperPrice !== undefined && opts.upperPrice !== '' && !isNaN(opts.upperPrice)
+    let upperPrice = opts.upperPrice !== undefined && opts.upperPrice !== '' && !isNaN(opts.upperPrice)
         ? Math.max(lowerPrice * 1.05, Number(opts.upperPrice))
         : Number((maxHistoryPrice * 1.08).toFixed(2));
+
+    // 若設定的價格區間完全脫離標的歷史真實波動範圍（例如殘留了上一檔低價股的上下限），自動校正為合規區間
+    if (upperPrice <= minHistoryPrice || lowerPrice >= maxHistoryPrice) {
+        lowerPrice = Number((minHistoryPrice * 0.92).toFixed(2));
+        upperPrice = Number((maxHistoryPrice * 1.08).toFixed(2));
+    }
+
 
     // 生成等比蛛網網格線 (Geometric Grid Lines)
     const ratio = gridPercent / 100;

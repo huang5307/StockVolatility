@@ -711,6 +711,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const maxPrice = Math.max(...prices);
         const lastClose = data[data.length - 1].close;
 
+        // 切換不同股票時，清空殘留的舊價格區間，避免舊標的價格範圍阻擋新標的交易
+        if (!currentLoadedStock || currentLoadedStock.code !== code) {
+            btLowerPrice.value = '';
+            btUpperPrice.value = '';
+        }
+
         currentLoadedStock = {
             code,
             name,
@@ -742,6 +748,13 @@ document.addEventListener('DOMContentLoaded', () => {
         optSpinner.style.display = 'inline-block';
         optimizeHintText.innerText = `正在為 ${stockCode} 執行全區間間距尋優掃描（1% ~ 10%）...`;
 
+        let lowerVal = btLowerPrice.value ? parseFloat(btLowerPrice.value) : '';
+        let upperVal = btUpperPrice.value ? parseFloat(btUpperPrice.value) : '';
+        if (currentLoadedStock) {
+            if (upperVal && upperVal <= currentLoadedStock.minPrice) upperVal = '';
+            if (lowerVal && lowerVal >= currentLoadedStock.maxPrice) lowerVal = '';
+        }
+
         const params = {
             symbol: stockCode,
             startDate: startDateInput.value || '',
@@ -751,9 +764,10 @@ document.addEventListener('DOMContentLoaded', () => {
             maxStock: btMaxStock.value || '',
             minStock: btMinStock.value || 0,
             initialCash: btInitialCash.value || '',
-            lowerPrice: btLowerPrice.value || '',
-            upperPrice: btUpperPrice.value || ''
+            lowerPrice: lowerVal,
+            upperPrice: upperVal
         };
+
 
         try {
             const res = await fetch('/api/backtest/optimize', {
@@ -924,6 +938,13 @@ document.addEventListener('DOMContentLoaded', () => {
         btSpinner.style.display = 'inline-block';
         backtestChart.showLoading();
 
+        let lowerVal = btLowerPrice.value ? parseFloat(btLowerPrice.value) : '';
+        let upperVal = btUpperPrice.value ? parseFloat(btUpperPrice.value) : '';
+        if (currentLoadedStock) {
+            if (upperVal && upperVal <= currentLoadedStock.minPrice) upperVal = '';
+            if (lowerVal && lowerVal >= currentLoadedStock.maxPrice) lowerVal = '';
+        }
+
         const params = {
             symbol: stockCode,
             startDate: startDateInput.value || '',
@@ -934,9 +955,10 @@ document.addEventListener('DOMContentLoaded', () => {
             maxStock: btMaxStock.value || '',
             minStock: btMinStock.value || 0,
             initialCash: btInitialCash.value || '',
-            lowerPrice: btLowerPrice.value || '',
-            upperPrice: btUpperPrice.value || ''
+            lowerPrice: lowerVal,
+            upperPrice: upperVal
         };
+
 
         try {
             const res = await fetch('/api/backtest', {
