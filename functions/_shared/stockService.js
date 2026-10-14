@@ -107,10 +107,17 @@ export async function getKLine(symbol, env) {
 // --- 内部获取逻辑 ---
 
 async function fetchFinMindName(symbol, env) {
-    const token = env?.FINMIND_TOKEN;
+    const rawToken = env?.FINMIND_TOKEN;
+    const token = typeof rawToken === 'string' ? rawToken.trim() : '';
+    const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    };
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
     const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockInfo&data_id=${symbol}${tokenParam}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { headers });
     if (!res.ok) throw new Error(`FinMind API returned status ${res.status}`);
     const data = await res.json();
     if (data.data && data.data.length > 0 && data.data[0].stock_name) {
@@ -152,13 +159,20 @@ async function fetchTencentName(symbol) {
 }
 
 async function fetchFinMindKLine(symbol, env) {
-    const token = env?.FINMIND_TOKEN;
+    const rawToken = env?.FINMIND_TOKEN;
+    const token = typeof rawToken === 'string' ? rawToken.trim() : '';
+    const headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+    };
+    if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+    }
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
     const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=2020-01-01${tokenParam}`;
-    const res = await fetch(url);
+    const res = await fetch(url, { headers });
     if (!res.ok) {
         if (res.status === 402) {
-            throw new Error(`FinMind 匿名公共請求額度已耗盡 (HTTP 402)。由於 Cloudflare 雲端共用公共出口 IP，請在 Cloudflare Pages 後台（Settings -> 變量和密鑰）中新增變數 FINMIND_TOKEN（至 finmindtrade.com 免費註冊即可取得），即可享受每小時 600 次專屬獨立額度。`);
+            throw new Error(`FinMind API 回應 402（額度已達上限或 Token 未生效）。請確認 Cloudflare Pages 的 FINMIND_TOKEN 已設定並觸發新部署。`);
         }
         throw new Error(`FinMind API returned status ${res.status}`);
     }
@@ -175,6 +189,7 @@ async function fetchFinMindKLine(symbol, env) {
     }
     throw new Error(`FinMind 沒有返回 ${symbol} 的 K 線數據`);
 }
+
 
 
 async function fetchSinaKLine(symbol) {
