@@ -190,9 +190,46 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
+    // --- 最新已收盤交易日計算 (UTC+8 台北/北京時間) ---
+    const getLatestTradingDate = () => {
+        const now = new Date();
+        const taipei = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
+        const dayOfWeek = taipei.getDay(); // 0 是週日，6 是週六
+        const hour = taipei.getHours();
+        const minute = taipei.getMinutes();
+        const timeMinutes = hour * 60 + minute;
+
+        let target = new Date(taipei);
+
+        if (dayOfWeek === 6) {
+            // 週六：前一天週五已收盤
+            target.setDate(target.getDate() - 1);
+        } else if (dayOfWeek === 0) {
+            // 週日：兩天前週五已收盤
+            target.setDate(target.getDate() - 2);
+        } else {
+            // 平日：台股 13:30 收盤，約 13:50 定案
+            if (timeMinutes < 13 * 60 + 50) {
+                if (dayOfWeek === 1) {
+                    target.setDate(target.getDate() - 3); // 週一未收盤前為上週五
+                } else {
+                    target.setDate(target.getDate() - 1); // 平日未收盤前為昨日
+                }
+            }
+        }
+
+        return target.toISOString().slice(0, 10);
+    };
+
     // --- 核心網路載入邏輯 ---
-    async function fetchDataFromLocalServer(code) {
-        const url = `/api/kline?symbol=${code}`;
+    async function fetchDataFromLocalServer(code, startDate, endDate) {
+        let url = `/api/kline?symbol=${encodeURIComponent(code)}`;
+        if (startDate && startDate !== '1900-01-01') {
+            url += `&startDate=${encodeURIComponent(startDate)}`;
+        }
+        if (endDate && endDate !== '9999-12-31') {
+            url += `&endDate=${encodeURIComponent(endDate)}`;
+        }
         const response = await fetch(url);
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: `伺服器回應異常: ${response.status}` }));
@@ -201,16 +238,83 @@ document.addEventListener('DOMContentLoaded', () => {
         return response.json();
     }
 
+    // 將 K 線資料批次寫入 IndexedDB 本地資料庫
     const saveData = async (klineData, stockCode, stockName) => {
-        if (!db) return;
-        const klineTx = db.transaction(KLINE_STORE_NAME, 'readwrite');
-        const klineStore = klineTx.objectStore(KLINE_STORE_NAME);
-        klineData.forEach(item => klineStore.put({ stock_code: stockCode, ...item }));
+        if (!db || !Array.isArray(klineData) || klineData.length === 0) return;
+        return new Promise((resolve) => {
+            const tx = db.transaction([KLINE_STORE_NAME, NAME_STORE_NAME], 'readwrite');
+            const klineStore = tx.objectStore(KLINE_STORE_NAME);
+            const nameStore = tx.objectStore(NAME_STORE_NAME);
 
-        const nameTx = db.transaction(NAME_STORE_NAME, 'readwrite');
-        nameTx.objectStore(NAME_STORE_NAME).put({ stock_code: stockCode, name: stockName });
-        
-        return Promise.all([klineTx.done, nameTx.done]);
+            klineData.forEach(item => {
+                klineStore.put({
+                    stock_code: stockCode,
+                    date: item.date,
+                    open: Number(item.open),
+                    high: Number(item.high),
+                    low: Number(item.low),
+                    close: Number(item.close),
+                    volume: Number(item.volume || 0)
+                });
+            });
+
+            if (stockName && stockName !== stockCode) {
+                nameStore.put({ stock_code: stockCode, name: stockName });
+            }
+
+            tx.oncomplete = () => resolve();
+            tx.onerror = (e) => {
+                console.warn('saveData error:', e.target.error);
+                resolve();
+            };
+        });
+    };
+
+    // 檢查本地 IndexedDB 資料庫：有沒有這檔股票的資料？日期範圍是不是都有？
+    const checkLocalDatabase = async (code, reqMinDate, reqMaxDate) => {
+        if (!db) return { hasData: false, isComplete: false, data: [] };
+
+        return new Promise((resolve) => {
+            const range = IDBKeyRange.bound([code, '1900-01-01'], [code, '9999-12-31']);
+            const tx = db.transaction(KLINE_STORE_NAME, 'readonly');
+            const store = tx.objectStore(KLINE_STORE_NAME);
+            const req = store.getAll(range);
+
+            req.onsuccess = () => {
+                const records = (req.result || []).sort((a, b) => a.date.localeCompare(b.date));
+                if (records.length === 0) {
+                    return resolve({ hasData: false, isComplete: false, data: [] });
+                }
+
+                const dbMinDate = records[0].date;
+                const dbMaxDate = records[records.length - 1].date;
+                const latestTradeDate = getLatestTradingDate();
+
+                // 1. 起始日期判定：資料庫最早日期 <= 請求起始日期，或已涵蓋至最早可得歷史 (<= 2020-01-10 且數量充裕)
+                const coversStart = (dbMinDate <= reqMinDate) || (dbMinDate <= '2020-01-10' && records.length >= 200);
+
+                // 2. 結束日期判定：
+                const effectiveReqMax = (!reqMaxDate || reqMaxDate >= '9999-12-31' || reqMaxDate > latestTradeDate)
+                    ? latestTradeDate
+                    : reqMaxDate;
+
+                const coversEnd = (dbMaxDate >= effectiveReqMax);
+                const isComplete = coversStart && coversEnd;
+                const filteredData = records.filter(r => r.date >= reqMinDate && r.date <= (reqMaxDate || '9999-12-31'));
+
+                resolve({
+                    hasData: true,
+                    isComplete,
+                    dbMinDate,
+                    dbMaxDate,
+                    data: filteredData.length > 0 ? filteredData : records
+                });
+            };
+
+            req.onerror = () => {
+                resolve({ hasData: false, isComplete: false, data: [] });
+            };
+        });
     };
 
     const handleQuery = async (event) => {
@@ -221,9 +325,9 @@ document.addEventListener('DOMContentLoaded', () => {
         [analysisTitleContainer, averageAmplitudeContainer, klineTitleContainer, weeklyAnalysisTitleContainer, weeklyAverageAmplitudeContainer].forEach(c => c.style.display = 'none');
 
         const stockCodeWithPossibleName = stockCodeInput.value.trim();
-        const stockCode = stockCodeWithPossibleName.split(' ')[0];
-        const startDate = startDateInput.value || '2000-01-01';
-        const endDate = endDateInput.value || '9999-12-31';
+        const stockCode = stockCodeWithPossibleName.split(' ')[0].toUpperCase();
+        const startDate = startDateInput.value || '';
+        const endDate = endDateInput.value || '';
 
         if (!stockCode) {
             showStatus('請輸入股票或 ETF 代號', 'warning');
@@ -233,100 +337,100 @@ document.addEventListener('DOMContentLoaded', () => {
 
         updateUnitLabels(stockCode);
 
-        let queryStartDate = new Date(startDate);
-        queryStartDate.setDate(queryStartDate.getDate() - 365);
-        const queryStartDateString = queryStartDate.toISOString().slice(0, 10);
-
-        const queryDB = (code, start, end) => {
-            return new Promise((resolve, reject) => {
-                const range = IDBKeyRange.bound([code, start], [code, end]);
-                const request = db.transaction(KLINE_STORE_NAME, 'readonly').objectStore(KLINE_STORE_NAME).getAll(range);
-                request.onerror = (e) => reject(e.target.error);
-                request.onsuccess = () => resolve(request.result.sort((a, b) => a.date.localeCompare(b.date)));
-            });
-        };
+        // 分析與指標所需區間：往前取 365 天以保證 250MA 充足
+        let queryStartDateString = '2020-01-01';
+        if (startDate) {
+            let queryStartDate = new Date(startDate);
+            queryStartDate.setDate(queryStartDate.getDate() - 365);
+            queryStartDateString = queryStartDate.toISOString().slice(0, 10);
+        }
+        const queryEndDateString = endDate || '9999-12-31';
 
         try {
-            showStatus(`正在從網路獲取 ${stockCode} 的最新行情數據...`, 'info');
-            const serverResponse = await fetchDataFromLocalServer(stockCode);
-            await saveData(serverResponse.kline, stockCode, serverResponse.name);
-            const stockName = serverResponse.name;
-            
+            // ========================================================
+            // 核心架構步驟 1：先從我們的資料庫查詢！
+            // 檢查有沒有這檔股票的資料？日期範圍是不是都有？
+            // ========================================================
+            const dbCheck = await checkLocalDatabase(stockCode, queryStartDateString, queryEndDateString);
+            let stockName = await getStockName(stockCode);
+            let allData = [];
+
+            if (dbCheck.hasData && dbCheck.isComplete) {
+                // ========================================================
+                // 核心架構步驟 2：資料庫已有且日期範圍完全涵蓋！
+                // 👉 不需要從外部網站下載，直接開始分析！
+                // ========================================================
+                allData = dbCheck.data;
+                showStatus(`已從資料庫直接載入 ${stockCode} (${stockName}) 共 ${allData.length} 筆日K數據（日期範圍完整涵蓋 ${dbCheck.dbMinDate} ~ ${dbCheck.dbMaxDate}），無須外部下載，直接開始分析！`, 'success');
+            } else {
+                // ========================================================
+                // 核心架構步驟 3：內容不全或是根本沒有這檔股票的資料！
+                // 👉 從外部網站下載資料到我們的資料庫中，確認數據完整後開始分析！
+                // ========================================================
+                if (!dbCheck.hasData) {
+                    showStatus(`資料庫尚無 ${stockCode} 紀錄，正在從外部網站下載歷史行情至資料庫...`, 'info');
+                } else {
+                    showStatus(`資料庫現有數據 (${dbCheck.dbMinDate} ~ ${dbCheck.dbMaxDate}) 未完全涵蓋查詢範圍，正在從外部網站下載補充至資料庫...`, 'info');
+                }
+
+                try {
+                    const serverResponse = await fetchDataFromLocalServer(stockCode, queryStartDateString, endDate);
+                    if (serverResponse.name) stockName = serverResponse.name;
+                    await saveData(serverResponse.kline, stockCode, stockName);
+
+                    // 確認數據都完整了
+                    const reCheck = await checkLocalDatabase(stockCode, queryStartDateString, queryEndDateString);
+                    allData = reCheck.data;
+                    showStatus(`數據已下載並確認完整存入資料庫（共 ${allData.length} 筆，範圍 ${reCheck.dbMinDate} ~ ${reCheck.dbMaxDate}），開始分析！`, 'success');
+                } catch (fetchError) {
+                    // 若外部下載失敗（例如 402 限流或斷網），但資料庫已有歷史數據，優雅降級！
+                    if (dbCheck.hasData && dbCheck.data.length > 0) {
+                        allData = dbCheck.data;
+                        showStatus(`外部下載遇到狀況 (${fetchError.message})，但資料庫已存有此標的歷史數據 (${dbCheck.dbMinDate} ~ ${dbCheck.dbMaxDate})，直接使用現有資料庫數據開始分析！`, 'warning');
+                    } else {
+                        throw fetchError;
+                    }
+                }
+            }
+
+            if (!allData || allData.length === 0) {
+                showStatus('在指定的時間區間內查無行情數據。', 'warning');
+                [amplitudeChart, klineChart, weeklyAmplitudeChart].forEach(c => c.clear());
+                return;
+            }
+
             if (stockName && stockName !== stockCode) {
                 updateSearchHistory(stockCode, stockName);
             }
 
-            const allData = await queryDB(stockCode, queryStartDateString, endDate);
+            // 確保容器與 Tab 完全顯示，開始渲染分析
+            const chartTabs = document.getElementById('chart-tabs');
+            const chartTabContent = document.getElementById('chart-tab-content');
+            chartTabs.style.display = 'flex';
+            chartTabContent.style.display = 'block';
 
-            if (allData.length === 0) {
-                showStatus('在指定的時間區間內查無行情數據。', 'warning');
-                [amplitudeChart, klineChart, weeklyAmplitudeChart].forEach(c => c.clear());
-            } else {
-                showStatus(`成功載入 ${stockCode} (${stockName}) 共 ${allData.length} 筆日K數據。`, 'success');
-                
-                // 先確保外層容器與 Tab 完全顯示，避免 ECharts 獲取到的容器寬度為 0
-                const chartTabs = document.getElementById('chart-tabs');
-                const chartTabContent = document.getElementById('chart-tab-content');
-                chartTabs.style.display = 'flex';
-                chartTabContent.style.display = 'block';
-
-                const klineTabBtn = document.getElementById('kline-tab');
-                if (klineTabBtn) {
-                    bootstrap.Tab.getOrCreateInstance(klineTabBtn).show();
-                }
-
-                renderCharts(allData, stockCode, stockName);
-                setupBacktestDefaults(allData, stockCode, stockName);
-
-                // 延遲強制觸發一次精準 resize，保證圖表 100% 寬度自適應
-                setTimeout(() => {
-                    klineChart.resize();
-                    amplitudeChart.resize();
-                }, 80);
-
-                localStorage.setItem('lastStockCode', `${stockCode} - ${stockName}`);
-                localStorage.setItem('lastStartDate', startDateInput.value);
-
-                // 自動觸發一次快速參數尋優，讓使用者一進來就看到最佳效益建議
-                triggerAutoOptimization();
+            const klineTabBtn = document.getElementById('kline-tab');
+            if (klineTabBtn) {
+                bootstrap.Tab.getOrCreateInstance(klineTabBtn).show();
             }
 
-        } catch (fetchError) {
-            try {
-                const stockName = await getStockName(stockCode);
-                const allData = await queryDB(stockCode, queryStartDateString, endDate);
+            renderCharts(allData, stockCode, stockName);
+            setupBacktestDefaults(allData, stockCode, stockName);
 
-                if (allData.length === 0) {
-                    showStatus(`錯誤: ${fetchError.message}`, 'danger');
-                    [amplitudeChart, klineChart].forEach(c => c.clear());
-                } else {
-                    showStatus(`無法從網路連線: ${fetchError.message}。現正顯示本地快取數據...`, 'warning');
-                    
-                    const chartTabs = document.getElementById('chart-tabs');
-                    const chartTabContent = document.getElementById('chart-tab-content');
-                    chartTabs.style.display = 'flex';
-                    chartTabContent.style.display = 'block';
+            setTimeout(() => {
+                klineChart.resize();
+                amplitudeChart.resize();
+            }, 80);
 
-                    const klineTabBtn = document.getElementById('kline-tab');
-                    if (klineTabBtn) {
-                        bootstrap.Tab.getOrCreateInstance(klineTabBtn).show();
-                    }
+            localStorage.setItem('lastStockCode', `${stockCode} - ${stockName}`);
+            if (startDateInput.value) localStorage.setItem('lastStartDate', startDateInput.value);
 
-                    renderCharts(allData, stockCode, stockName);
-                    setupBacktestDefaults(allData, stockCode, stockName);
+            // 自動觸發一次快速參數尋優，讓使用者一目了然最佳間距
+            triggerAutoOptimization();
 
-                    setTimeout(() => {
-                        klineChart.resize();
-                        amplitudeChart.resize();
-                    }, 80);
-
-                    localStorage.setItem('lastStockCode', `${stockCode} - ${stockName}`);
-                    localStorage.setItem('lastStartDate', startDateInput.value);
-                }
-            } catch (dbError) {
-                showStatus(`網路與本地快取載入均失敗: ${dbError.message}`, 'danger');
-            }
-
+        } catch (err) {
+            showStatus(`查詢失敗: ${err.message}`, 'danger');
+            [amplitudeChart, klineChart].forEach(c => c.clear());
         } finally {
             [amplitudeChart, klineChart, weeklyAmplitudeChart].forEach(c => c.hideLoading());
         }

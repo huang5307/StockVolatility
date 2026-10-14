@@ -89,29 +89,32 @@ function getNextDay(dateStr) {
 
 // 判斷是否需要進行今日增量拉取（判斷開盤/收盤狀態）
 function shouldCheckIncrementalUpdate(maxDate) {
+    if (!maxDate) return true;
     const now = new Date();
     // 台北/北京時間 UTC+8
     const taipei = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
     const todayStr = taipei.toISOString().slice(0, 10);
 
-    // 如果資料庫中最新日期已經等於今天，完全不需要增量
+    // 如果資料庫中最新日期已經等於或超過今天，完全不需要增量
     if (maxDate >= todayStr) return false;
 
     const dayOfWeek = taipei.getDay(); // 0 是週日，6 是週六
     const hour = taipei.getHours();
+    const minute = taipei.getMinutes();
+    const timeMinutes = hour * 60 + minute;
+
+    // 計算相差天數
+    const diffDays = Math.round((new Date(todayStr + 'T00:00:00Z') - new Date(maxDate + 'T00:00:00Z')) / 86400000);
 
     // 如果今天是週末，且最新日期是剛過去的週五，則無須請求
-    if (dayOfWeek === 6 || dayOfWeek === 0) {
-        const diffDays = (new Date(todayStr) - new Date(maxDate)) / (1000 * 3600 * 24);
-        if (dayOfWeek === 6 && diffDays <= 1) return false;
-        if (dayOfWeek === 0 && diffDays <= 2) return false;
-    }
+    if (dayOfWeek === 6 && diffDays <= 1) return false;
+    if (dayOfWeek === 0 && diffDays <= 2) return false;
 
-    // 平日交易時間：台股下午 13:30 收盤，數據約 14:00 後定案。
-    // 如果今天尚未收盤，且最新日期為昨天（相差1天），則今日日K尚未出爐，無須重複請求
-    if (hour < 14) {
-        const diffDays = (new Date(todayStr) - new Date(maxDate)) / (1000 * 3600 * 24);
-        if (diffDays <= 1) return false;
+    // 平日交易時間：台股下午 13:30 收盤，約 13:50 後定案。
+    // 如果今天尚未收盤：
+    if (timeMinutes < 13 * 60 + 50) {
+        if (dayOfWeek === 1 && diffDays <= 3) return false; // 週一盤中，最新日為上週五
+        if (diffDays <= 1) return false; // 平日盤中，最新日為昨日
     }
 
     return true;
@@ -190,14 +193,14 @@ export async function getStockName(symbol, env) {
 }
 
 /**
- * 獲取 K 線數據（整合 D1 永久儲存、智能增量同步與 KV 高速快取）
+ * 獲取 K 線數據（整合 D1 永久儲存、資料庫優先架構、智能增量同步與 KV 高速快取）
  */
-export async function getKLine(symbol, env) {
+export async function getKLine(symbol, env, targetStartDate, targetEndDate) {
     const cleanSymbol = symbol.trim().toUpperCase();
     const cacheKey = `kline:${cleanSymbol.toLowerCase()}`;
 
-    // 1. 優先查 KV 高速快取（命中時直接回傳，零 D1/零外部 API 消耗）
-    if (env?.STOCK_CACHE) {
+    // 1. 優先查 KV 高速快取（無自訂日期範圍限制時）
+    if (env?.STOCK_CACHE && !targetStartDate) {
         try {
             const cachedData = await env.STOCK_CACHE.get(cacheKey, 'json');
             if (cachedData && Array.isArray(cachedData) && cachedData.length > 0) {
@@ -208,7 +211,7 @@ export async function getKLine(symbol, env) {
         }
     }
 
-    // 2. 檢查 Cloudflare D1 資料庫現有歷史存檔
+    // 2. 核心架構：優先檢查 Cloudflare D1 資料庫現有歷史存檔
     if (env?.STOCK_DB) {
         try {
             await ensureTables(env.STOCK_DB);
@@ -220,12 +223,31 @@ export async function getKLine(symbol, env) {
             `).bind(cleanSymbol).first();
 
             const count = stats?.count || 0;
+            const minDate = stats?.min_date;
             const maxDate = stats?.max_date;
 
             if (count > 0 && maxDate) {
-                // 資料庫已有歷史數據！判斷是否需要增量獲取最新未收盤/新交易日數據
+                // 資料庫已有歷史數據！判斷日期範圍是否都有
                 const needIncremental = shouldCheckIncrementalUpdate(maxDate);
+                const needEarlier = targetStartDate && minDate && (minDate > targetStartDate);
 
+                // 若日期範圍都有（無需增量，且涵蓋請求的起始日期）：
+                // 👉 直接從 D1 讀取回傳，耗時僅需 5~10 毫秒，外部 API 呼叫次數為 0！
+                if (!needIncremental && !needEarlier) {
+                    const rows = await env.STOCK_DB.prepare(`
+                        SELECT date, open, high, low, close, volume 
+                        FROM stock_daily_kline 
+                        WHERE symbol = ? 
+                        ORDER BY date ASC
+                    `).bind(cleanSymbol).all();
+
+                    const kline = rows?.results || [];
+                    if (kline.length > 0) {
+                        return kline;
+                    }
+                }
+
+                // 若內容不全（有新交易日或缺少起始日期），自外部下載補充至 D1
                 if (needIncremental && isTaiwanStock(cleanSymbol)) {
                     const nextStartDate = getNextDay(maxDate);
                     try {
@@ -234,12 +256,23 @@ export async function getKLine(symbol, env) {
                             await batchInsertKLine(env.STOCK_DB, cleanSymbol, newRows);
                         }
                     } catch (incErr) {
-                        // 若遇到 FinMind 限流或 402，優雅降級！直接使用 D1 已有的全部歷史數據
+                        // 若遇到 FinMind 402 或限流，優雅降級！直接使用 D1 已有的全部歷史數據
                         console.warn(`[D1 Incremental] 增量請求失敗 (${incErr.message})，降級使用 D1 資料庫現有歷史存檔`);
                     }
                 }
 
-                // 自 D1 資料庫讀取歷史日K
+                if (needEarlier && isTaiwanStock(cleanSymbol)) {
+                    try {
+                        const earlyRows = await fetchFinMindKLine(cleanSymbol, env, targetStartDate);
+                        if (Array.isArray(earlyRows) && earlyRows.length > 0) {
+                            await batchInsertKLine(env.STOCK_DB, cleanSymbol, earlyRows);
+                        }
+                    } catch (earlyErr) {
+                        console.warn(`[D1 Earlier] 早期歷史請求失敗 (${earlyErr.message})`);
+                    }
+                }
+
+                // 自 D1 資料庫讀取確認完整後的歷史日K
                 const rows = await env.STOCK_DB.prepare(`
                     SELECT date, open, high, low, close, volume 
                     FROM stock_daily_kline 
@@ -260,15 +293,16 @@ export async function getKLine(symbol, env) {
         }
     }
 
-    // 3. 若 D1 中尚未有該標的歷史存檔（系統第一次查詢該標的），才向外部 API 請求自 2020 年以來的完整歷史數據
+    // 3. 若 D1 中根本沒有該標的歷史存檔（系統第一次查詢該標的），才向外部 API 下載
     let klineData;
+    const fetchStart = targetStartDate || '2020-01-01';
     if (isTaiwanStock(cleanSymbol)) {
-        klineData = await fetchFinMindKLine(cleanSymbol, env, '2020-01-01');
+        klineData = await fetchFinMindKLine(cleanSymbol, env, fetchStart);
     } else {
         klineData = await fetchSinaKLine(cleanSymbol);
     }
 
-    // 4. 將首次拉取的完整歷史日K永久寫入 D1 資料庫，此後該歷史區間再也不會重複請求！
+    // 4. 將下載的完整歷史日K存入 D1 資料庫，確認數據完整！此後該歷史區間再也不會重複請求！
     if (env?.STOCK_DB && Array.isArray(klineData) && klineData.length > 0) {
         try {
             await ensureTables(env.STOCK_DB);
@@ -294,7 +328,7 @@ export async function getKLine(symbol, env) {
 
 async function fetchFinMindName(symbol, env) {
     const rawToken = env?.FINMIND_TOKEN;
-    const token = typeof rawToken === 'string' ? rawToken.trim() : '';
+    const token = typeof rawToken === 'string' ? rawToken.replace(/^["']|["']$/g, '').trim() : '';
     const headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     };
@@ -346,7 +380,7 @@ async function fetchTencentName(symbol) {
 
 async function fetchFinMindKLine(symbol, env, startDate = '2020-01-01') {
     const rawToken = env?.FINMIND_TOKEN;
-    const token = typeof rawToken === 'string' ? rawToken.trim() : '';
+    const token = typeof rawToken === 'string' ? rawToken.replace(/^["']|["']$/g, '').trim() : '';
     const headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
     };
