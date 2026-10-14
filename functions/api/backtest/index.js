@@ -136,6 +136,7 @@ export async function onRequest(context) {
                 realizedProfit: result.realizedProfit,
                 gridReturn: result.gridReturn,
                 annualizedGridReturn: result.annualizedGridReturn,
+                avgProfitPerTrade: result.avgProfitPerTrade,
                 maxCapitalDeployed: result.maxCapitalDeployed,
                 unrealizedProfit: result.unrealizedProfit,
                 totalInitialEquity: result.initialParams.totalInitialEquity,

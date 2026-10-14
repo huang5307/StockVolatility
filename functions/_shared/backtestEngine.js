@@ -286,6 +286,7 @@ export function runBacktest(kline, opts = {}) {
     const annualizedGridReturn = days > 30 ? Math.pow(1 + Math.max(-0.99, gridReturn), 365 / days) - 1 : gridReturn;
     const annualizedReturn = days > 30 ? Math.pow(1 + Math.max(-0.99, totalReturn), 365 / days) - 1 : totalReturn;
     const winRate = closedTrades > 0 ? winTrades / closedTrades : 0;
+    const avgProfitPerTrade = closedTrades > 0 ? Number((realizedProfit / closedTrades).toFixed(2)) : 0;
 
     return {
         unitInfo,
@@ -306,6 +307,7 @@ export function runBacktest(kline, opts = {}) {
         maxCapitalDeployed: Number(safeMaxCapital.toFixed(2)),
         gridReturn: Number(gridReturn.toFixed(4)),
         annualizedGridReturn: Number(annualizedGridReturn.toFixed(4)),
+        avgProfitPerTrade,
 
         // 期末持倉與浮動市值指標（未平倉持股）
         unrealizedProfit: Number(unrealizedProfit.toFixed(2)),
@@ -362,6 +364,7 @@ export function optimizeGrid(kline, baseOpts = {}) {
                 realizedProfit: res.realizedProfit,
                 gridReturn: res.gridReturn,
                 annualizedGridReturn: res.annualizedGridReturn,
+                avgProfitPerTrade: res.avgProfitPerTrade,
                 maxCapitalDeployed: res.maxCapitalDeployed,
                 unrealizedProfit: res.unrealizedProfit,
                 finalStockUnits: res.finalStockUnits,

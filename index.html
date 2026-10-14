@@ -147,7 +147,7 @@
                                             <th>波動套利純獲利 ($)</th>
                                             <th>套利報酬率 (%)</th>
                                             <th>平倉套利筆數</th>
-                                            <th>勝率</th>
+                                            <th>平均每筆獲利 ($)</th>
                                             <th>最大佔用本金</th>
                                             <th>期末持倉</th>
                                             <th>操作</th>
@@ -174,19 +174,19 @@
                                 <input type="number" step="0.1" class="form-control" id="bt-grid-percent" value="3.0" min="0.1" max="50" required>
                             </div>
                             <div class="col-md-2 col-6">
-                                <label for="bt-order-quantity" class="form-label" id="label-order-quantity">每筆買賣 (張)</label>
+                                <label for="bt-order-quantity" class="form-label" id="label-order-quantity">每筆買賣 (張/手)</label>
                                 <input type="number" class="form-control" id="bt-order-quantity" value="1" min="1" required>
                             </div>
                             <div class="col-md-2 col-6">
-                                <label for="bt-initial-stock" class="form-label" id="label-initial-stock">原始庫存 (張)</label>
+                                <label for="bt-initial-stock" class="form-label" id="label-initial-stock">原始庫存 (張/手)</label>
                                 <input type="number" class="form-control" id="bt-initial-stock" value="0" min="0">
                             </div>
                             <div class="col-md-2 col-6">
-                                <label for="bt-max-stock" class="form-label" id="label-max-stock">最大庫存上限 (張)</label>
+                                <label for="bt-max-stock" class="form-label" id="label-max-stock">最大庫存上限 (張/手)</label>
                                 <input type="number" class="form-control" id="bt-max-stock" placeholder="預設無限制">
                             </div>
                             <div class="col-md-2 col-6">
-                                <label for="bt-min-stock" class="form-label" id="label-min-stock">最小庫存底倉 (張)</label>
+                                <label for="bt-min-stock" class="form-label" id="label-min-stock">最小庫存底倉 (張/手)</label>
                                 <input type="number" class="form-control" id="bt-min-stock" value="0" min="0">
                             </div>
                             <div class="col-md-2 col-6">
@@ -226,7 +226,7 @@
                             <div class="metric-card">
                                 <div class="metric-title">平倉套利 / 總成交</div>
                                 <div class="metric-value text-primary fs-5" id="res-total-trades">--</div>
-                                <small class="text-success fw-semibold" id="res-win-rate">勝率: 100%</small>
+                                <small class="text-success fw-semibold" id="res-avg-profit">平均每筆: --</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-2">

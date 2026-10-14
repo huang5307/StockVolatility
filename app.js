@@ -106,12 +106,11 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // 更新介面上的張/手交易單位標籤
-    const updateUnitLabels = (code) => {
-        const unit = isTaiwanCode(code) ? '張' : '手';
-        if (labelOrderQuantity) labelOrderQuantity.innerText = `每筆買賣 (${unit})`;
-        if (labelInitialStock) labelInitialStock.innerText = `原始庫存 (${unit})`;
-        if (labelMaxStock) labelMaxStock.innerText = `最大庫存上限 (${unit})`;
-        if (labelMinStock) labelMinStock.innerText = `最小庫存底倉 (${unit})`;
+    const updateUnitLabels = () => {
+        if (labelOrderQuantity) labelOrderQuantity.innerText = `每筆買賣 (張/手)`;
+        if (labelInitialStock) labelInitialStock.innerText = `原始庫存 (張/手)`;
+        if (labelMaxStock) labelMaxStock.innerText = `最大庫存上限 (張/手)`;
+        if (labelMinStock) labelMinStock.innerText = `最小庫存底倉 (張/手)`;
     };
 
     // --- 歷史搜尋紀錄 ---
@@ -911,14 +910,16 @@ document.addEventListener('DOMContentLoaded', () => {
         recBestReturnTitle.innerText = `跳動間距 ${br.gridPercent}%`;
         const brProfit = Math.round(br.realizedProfit).toLocaleString();
         const brGridRet = (br.gridReturn * 100).toFixed(2);
-        recBestReturnDesc.innerHTML = `波動套利純獲利: <strong class="text-success fs-6">+$${brProfit}</strong> (套利報酬 +${brGridRet}%)<br/>平倉套利: <strong>${br.closedTrades} 筆</strong> (勝率 ${(br.winRate * 100).toFixed(0)}%) | 最大佔用本金: $${Math.round(br.maxCapitalDeployed).toLocaleString()}`;
+        const brAvgProfit = Math.round(br.avgProfitPerTrade || (br.closedTrades > 0 ? br.realizedProfit / br.closedTrades : 0)).toLocaleString();
+        recBestReturnDesc.innerHTML = `波動套利純獲利: <strong class="text-success fs-6">+$${brProfit}</strong> (套利報酬 +${brGridRet}%)<br/>平倉套利: <strong>${br.closedTrades} 筆</strong> (平均每筆 +$${brAvgProfit}) | 最大佔用本金: $${Math.round(br.maxCapitalDeployed).toLocaleString()}`;
 
         // 2. 最穩健配置
         const bb = rec.bestBalanced;
         recBestBalancedTitle.innerText = `跳動間距 ${bb.gridPercent}%`;
         const bbProfit = Math.round(bb.realizedProfit).toLocaleString();
         const bbGridRet = (bb.gridReturn * 100).toFixed(2);
-        recBestBalancedDesc.innerHTML = `波動套利純獲利: <strong class="text-info-emphasis">+$${bbProfit}</strong> (套利報酬 +${bbGridRet}%)<br/>最大回撤僅 <strong>${(bb.maxDrawdown * 100).toFixed(1)}%</strong> | 平倉 ${bb.closedTrades} 筆 (風報比最佳)`;
+        const bbAvgProfit = Math.round(bb.avgProfitPerTrade || (bb.closedTrades > 0 ? bb.realizedProfit / bb.closedTrades : 0)).toLocaleString();
+        recBestBalancedDesc.innerHTML = `波動套利純獲利: <strong class="text-info-emphasis">+$${bbProfit}</strong> (套利報酬 +${bbGridRet}%)<br/>最大回撤僅 <strong>${(bb.maxDrawdown * 100).toFixed(1)}%</strong> | 平倉 ${bb.closedTrades} 筆 (平均每筆 +$${bbAvgProfit})`;
 
         // 3. ATR 建議
         const atrPct = rec.atrRecommendedPercent;
@@ -939,6 +940,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const tr = document.createElement('tr');
             const profitStr = Math.round(item.realizedProfit).toLocaleString();
             const gridRetPct = (item.gridReturn * 100).toFixed(2);
+            const avgProfitStr = Math.round(item.avgProfitPerTrade || (item.closedTrades > 0 ? item.realizedProfit / item.closedTrades : 0)).toLocaleString();
             const isBest = item.gridPercent === br.gridPercent;
             tr.className = isBest ? 'table-success fw-bold' : '';
 
@@ -947,7 +949,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="text-profit fw-bold">+$${profitStr}</td>
                 <td class="text-success fw-bold">+${gridRetPct}%</td>
                 <td>${item.closedTrades} 筆</td>
-                <td><span class="badge bg-success-subtle text-success">${(item.winRate * 100).toFixed(0)}%</span></td>
+                <td><strong class="text-success">+$${avgProfitStr}</strong></td>
                 <td>$${Math.round(item.maxCapitalDeployed).toLocaleString()}</td>
                 <td>${item.finalStockUnits || 0} ${unit}</td>
                 <td><button class="btn btn-sm ${isBest ? 'btn-success' : 'btn-outline-primary'} py-0 px-2 btn-apply-row" data-percent="${item.gridPercent}">套用</button></td>
@@ -1087,8 +1089,8 @@ document.addEventListener('DOMContentLoaded', () => {
             renderBacktestResults(data);
             loadBacktestHistory();
             const profitStr = Math.round(data.summary.realizedProfit).toLocaleString();
-            const gridRetPct = (data.summary.gridReturn * 100).toFixed(2);
-            showStatus(`回測完成！${data.symbol} (${data.stockName}) 間距 ${data.initialParams.gridPercent}%，波動套利純獲利: +$${profitStr} (平倉套利 ${data.summary.closedTrades} 筆，勝率 ${(data.summary.winRate * 100).toFixed(0)}%)`, 'success');
+            const avgP = Math.round(data.summary.avgProfitPerTrade || (data.summary.closedTrades > 0 ? data.summary.realizedProfit / data.summary.closedTrades : 0)).toLocaleString();
+            showStatus(`回測完成！${data.symbol} (${data.stockName}) 間距 ${data.initialParams.gridPercent}%，波動套利純獲利: +$${profitStr} (平倉套利 ${data.summary.closedTrades} 筆，平均每筆 +$${avgP})`, 'success');
         } catch (err) {
             showStatus(`回測執行發生異常: ${err.message}`, 'danger');
         } finally {
@@ -1115,14 +1117,15 @@ document.addEventListener('DOMContentLoaded', () => {
             gridRetEl.innerHTML = `套利報酬: <strong class="text-success">+${grPct}%</strong> (年化 +${annGrPct}%)`;
         }
 
-        // 2. 平倉套利筆數與勝率
+        // 2. 平倉套利筆數與平均每筆獲利
         const tradesEl = document.getElementById('res-total-trades');
         if (tradesEl) {
             tradesEl.innerText = `${sum.closedTrades} 筆平倉 (總成交 ${sum.totalTrades} 筆)`;
         }
-        const winEl = document.getElementById('res-win-rate');
-        if (winEl) {
-            winEl.innerText = `勝率: ${(sum.winRate * 100).toFixed(0)}% (低買高賣必賺)`;
+        const avgProfitEl = document.getElementById('res-avg-profit');
+        if (avgProfitEl) {
+            const avgVal = Math.round(sum.avgProfitPerTrade || (sum.closedTrades > 0 ? sum.realizedProfit / sum.closedTrades : 0));
+            avgProfitEl.innerText = `平均每筆: +$${avgVal.toLocaleString()}`;
         }
 
         // 3. 剩餘持倉與浮動盈虧
@@ -1323,6 +1326,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     realizedProfit: rec.realized_profit !== undefined ? rec.realized_profit : Math.max(0, (rec.final_equity - (rec.total_initial_equity || rec.initial_cash || 0))),
                     gridReturn: rec.grid_return !== undefined ? rec.grid_return : (rec.total_return || 0),
                     annualizedGridReturn: rec.annualized_grid_return || rec.annualized_return || rec.total_return || 0,
+                    avgProfitPerTrade: rec.closed_trades > 0 ? (rec.realized_profit / rec.closed_trades) : 0,
                     maxCapitalDeployed: rec.max_capital_deployed || rec.total_initial_equity || rec.initial_cash || 100000,
                     unrealizedProfit: rec.unrealized_profit !== undefined ? rec.unrealized_profit : 0,
                     totalInitialEquity: rec.total_initial_equity || rec.initial_cash,
