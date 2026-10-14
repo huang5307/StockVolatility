@@ -1,5 +1,6 @@
 /**
- * 股票数据获取与缓存服务 (适用于 Cloudflare Pages Functions)
+ * 股票數據獲取、持久化與增量同步服務 (適用於 Cloudflare Pages Functions)
+ * 支援 Cloudflare D1 資料庫永久儲存歷史日K，避免重複請求外部 API 浪費額度
  */
 
 const SINA_HEADERS = {
@@ -12,7 +13,7 @@ const TENCENT_HEADERS = {
     'Referer': 'https://gu.qq.com/'
 };
 
-// 格式化股票代码前缀（A股）
+// 格式化股票代碼前綴（A股）
 export function getSinaSymbol(symbol) {
     const clean = symbol.trim().toLowerCase();
     if (clean.startsWith('sh') || clean.startsWith('sz') || clean.startsWith('bj')) {
@@ -24,17 +25,106 @@ export function getSinaSymbol(symbol) {
     return clean;
 }
 
-// 判断是否为台湾股票或 ETF
+// 判斷是否為台灣股票或 ETF
 export function isTaiwanStock(symbol) {
     const clean = symbol.trim();
     return /^\d{4}$/.test(clean) || /^00\d{2,4}[A-Z]?$/i.test(clean);
 }
 
+// 自動確保 D1 歷史行情資料表存在
+let tablesInitialized = false;
+export async function ensureTables(db) {
+    if (tablesInitialized || !db) return;
+    try {
+        await db.exec(`
+            CREATE TABLE IF NOT EXISTS stock_daily_kline (
+                symbol TEXT NOT NULL,
+                date TEXT NOT NULL,
+                open REAL NOT NULL,
+                high REAL NOT NULL,
+                low REAL NOT NULL,
+                close REAL NOT NULL,
+                volume REAL DEFAULT 0,
+                PRIMARY KEY (symbol, date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_kline_sym_date ON stock_daily_kline(symbol, date ASC);
+            CREATE TABLE IF NOT EXISTS stock_info (
+                symbol TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        tablesInitialized = true;
+    } catch (err) {
+        console.warn('ensureTables warning:', err);
+    }
+}
+
+// 將 K 線資料批次寫入 D1（分批 50 筆，符合 D1 批量建議）
+async function batchInsertKLine(db, symbol, rows) {
+    if (!db || !Array.isArray(rows) || rows.length === 0) return;
+    try {
+        const cleanSymbol = symbol.trim().toUpperCase();
+        const stmts = rows.map(r => 
+            db.prepare(`
+                INSERT OR REPLACE INTO stock_daily_kline (symbol, date, open, high, low, close, volume) 
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).bind(cleanSymbol, r.date, Number(r.open), Number(r.high), Number(r.low), Number(r.close), Number(r.volume || 0))
+        );
+
+        for (let i = 0; i < stmts.length; i += 50) {
+            await db.batch(stmts.slice(i, i + 50));
+        }
+    } catch (e) {
+        console.warn(`batchInsertKLine failed for ${symbol}:`, e.message);
+    }
+}
+
+// 計算隔日日期字串 (YYYY-MM-DD)
+function getNextDay(dateStr) {
+    const d = new Date(dateStr + 'T00:00:00Z');
+    d.setUTCDate(d.getUTCDate() + 1);
+    return d.toISOString().slice(0, 10);
+}
+
+// 判斷是否需要進行今日增量拉取（判斷開盤/收盤狀態）
+function shouldCheckIncrementalUpdate(maxDate) {
+    const now = new Date();
+    // 台北/北京時間 UTC+8
+    const taipei = new Date(now.getTime() + (8 * 60 + now.getTimezoneOffset()) * 60000);
+    const todayStr = taipei.toISOString().slice(0, 10);
+
+    // 如果資料庫中最新日期已經等於今天，完全不需要增量
+    if (maxDate >= todayStr) return false;
+
+    const dayOfWeek = taipei.getDay(); // 0 是週日，6 是週六
+    const hour = taipei.getHours();
+
+    // 如果今天是週末，且最新日期是剛過去的週五，則無須請求
+    if (dayOfWeek === 6 || dayOfWeek === 0) {
+        const diffDays = (new Date(todayStr) - new Date(maxDate)) / (1000 * 3600 * 24);
+        if (dayOfWeek === 6 && diffDays <= 1) return false;
+        if (dayOfWeek === 0 && diffDays <= 2) return false;
+    }
+
+    // 平日交易時間：台股下午 13:30 收盤，數據約 14:00 後定案。
+    // 如果今天尚未收盤，且最新日期為昨天（相差1天），則今日日K尚未出爐，無須重複請求
+    if (hour < 14) {
+        const diffDays = (new Date(todayStr) - new Date(maxDate)) / (1000 * 3600 * 24);
+        if (diffDays <= 1) return false;
+    }
+
+    return true;
+}
+
 /**
- * 获取股票名称（带 KV 缓存）
+ * 獲取股票名稱（帶 D1 持久儲存與 KV 快取）
  */
 export async function getStockName(symbol, env) {
-    const cacheKey = `name:${symbol.toLowerCase()}`;
+    const cleanSymbol = symbol.trim().toUpperCase();
+    const cacheKey = `name:${cleanSymbol.toLowerCase()}`;
+
+    // 1. 優先查 KV 快取
     if (env?.STOCK_CACHE) {
         try {
             const cachedName = await env.STOCK_CACHE.get(cacheKey);
@@ -44,30 +134,55 @@ export async function getStockName(symbol, env) {
         }
     }
 
-    let name = symbol;
-    if (isTaiwanStock(symbol)) {
+    // 2. 查 D1 資料庫
+    if (env?.STOCK_DB) {
         try {
-            name = await fetchFinMindName(symbol, env);
+            await ensureTables(env.STOCK_DB);
+            const row = await env.STOCK_DB.prepare('SELECT name FROM stock_info WHERE symbol = ?').bind(cleanSymbol).first();
+            if (row && row.name && row.name !== cleanSymbol) {
+                if (env?.STOCK_CACHE) {
+                    await env.STOCK_CACHE.put(cacheKey, row.name, { expirationTtl: 30 * 86400 }).catch(() => {});
+                }
+                return row.name;
+            }
         } catch (e) {
-            console.warn(`FinMind name fetch failed for ${symbol}:`, e.message);
-            name = symbol;
-        }
-    } else {
-        // 先尝试新浪，失败降级到腾讯
-        try {
-            name = await fetchSinaName(symbol);
-        } catch (sinaErr) {
-            console.warn(`Sina name fetch failed for ${symbol}, trying Tencent:`, sinaErr.message);
-            name = await fetchTencentName(symbol);
+            console.warn('D1 stock_info read error:', e);
         }
     }
 
-    if (env?.STOCK_CACHE && name && name !== symbol) {
+    // 3. 外部 API 獲取
+    let name = cleanSymbol;
+    if (isTaiwanStock(cleanSymbol)) {
         try {
-            // 缓存 30 天
-            await env.STOCK_CACHE.put(cacheKey, name, { expirationTtl: 30 * 86400 });
+            name = await fetchFinMindName(cleanSymbol, env);
         } catch (e) {
-            console.warn('KV write error:', e);
+            console.warn(`FinMind name fetch failed for ${cleanSymbol}:`, e.message);
+            name = cleanSymbol;
+        }
+    } else {
+        try {
+            name = await fetchSinaName(cleanSymbol);
+        } catch (sinaErr) {
+            console.warn(`Sina name fetch failed for ${cleanSymbol}, trying Tencent:`, sinaErr.message);
+            name = await fetchTencentName(cleanSymbol);
+        }
+    }
+
+    // 4. 回寫 D1 資料庫與 KV 快取
+    if (name && name !== cleanSymbol) {
+        if (env?.STOCK_DB) {
+            try {
+                await env.STOCK_DB.prepare('INSERT OR REPLACE INTO stock_info (symbol, name) VALUES (?, ?)').bind(cleanSymbol, name).run();
+            } catch (e) {
+                console.warn('D1 stock_info write error:', e);
+            }
+        }
+        if (env?.STOCK_CACHE) {
+            try {
+                await env.STOCK_CACHE.put(cacheKey, name, { expirationTtl: 30 * 86400 });
+            } catch (e) {
+                console.warn('KV write error:', e);
+            }
         }
     }
 
@@ -75,10 +190,13 @@ export async function getStockName(symbol, env) {
 }
 
 /**
- * 获取 K 线数据（带 KV 缓存）
+ * 獲取 K 線數據（整合 D1 永久儲存、智能增量同步與 KV 高速快取）
  */
 export async function getKLine(symbol, env) {
-    const cacheKey = `kline:${symbol.toLowerCase()}`;
+    const cleanSymbol = symbol.trim().toUpperCase();
+    const cacheKey = `kline:${cleanSymbol.toLowerCase()}`;
+
+    // 1. 優先查 KV 高速快取（命中時直接回傳，零 D1/零外部 API 消耗）
     if (env?.STOCK_CACHE) {
         try {
             const cachedData = await env.STOCK_CACHE.get(cacheKey, 'json');
@@ -90,16 +208,79 @@ export async function getKLine(symbol, env) {
         }
     }
 
-    let klineData;
-    if (isTaiwanStock(symbol)) {
-        klineData = await fetchFinMindKLine(symbol, env);
-    } else {
-        klineData = await fetchSinaKLine(symbol);
+    // 2. 檢查 Cloudflare D1 資料庫現有歷史存檔
+    if (env?.STOCK_DB) {
+        try {
+            await ensureTables(env.STOCK_DB);
+
+            const stats = await env.STOCK_DB.prepare(`
+                SELECT COUNT(*) as count, MIN(date) as min_date, MAX(date) as max_date 
+                FROM stock_daily_kline 
+                WHERE symbol = ?
+            `).bind(cleanSymbol).first();
+
+            const count = stats?.count || 0;
+            const maxDate = stats?.max_date;
+
+            if (count > 0 && maxDate) {
+                // 資料庫已有歷史數據！判斷是否需要增量獲取最新未收盤/新交易日數據
+                const needIncremental = shouldCheckIncrementalUpdate(maxDate);
+
+                if (needIncremental && isTaiwanStock(cleanSymbol)) {
+                    const nextStartDate = getNextDay(maxDate);
+                    try {
+                        const newRows = await fetchFinMindKLine(cleanSymbol, env, nextStartDate);
+                        if (Array.isArray(newRows) && newRows.length > 0) {
+                            await batchInsertKLine(env.STOCK_DB, cleanSymbol, newRows);
+                        }
+                    } catch (incErr) {
+                        // 若遇到 FinMind 限流或 402，優雅降級！直接使用 D1 已有的全部歷史數據
+                        console.warn(`[D1 Incremental] 增量請求失敗 (${incErr.message})，降級使用 D1 資料庫現有歷史存檔`);
+                    }
+                }
+
+                // 自 D1 資料庫讀取歷史日K
+                const rows = await env.STOCK_DB.prepare(`
+                    SELECT date, open, high, low, close, volume 
+                    FROM stock_daily_kline 
+                    WHERE symbol = ? 
+                    ORDER BY date ASC
+                `).bind(cleanSymbol).all();
+
+                const kline = rows?.results || [];
+                if (kline.length > 0) {
+                    if (env?.STOCK_CACHE) {
+                        await env.STOCK_CACHE.put(cacheKey, JSON.stringify(kline), { expirationTtl: 14400 }).catch(() => {});
+                    }
+                    return kline;
+                }
+            }
+        } catch (dbErr) {
+            console.warn('[D1 KLine] 資料庫操作異常，降級至直接請求外部 API:', dbErr);
+        }
     }
 
+    // 3. 若 D1 中尚未有該標的歷史存檔（系統第一次查詢該標的），才向外部 API 請求自 2020 年以來的完整歷史數據
+    let klineData;
+    if (isTaiwanStock(cleanSymbol)) {
+        klineData = await fetchFinMindKLine(cleanSymbol, env, '2020-01-01');
+    } else {
+        klineData = await fetchSinaKLine(cleanSymbol);
+    }
+
+    // 4. 將首次拉取的完整歷史日K永久寫入 D1 資料庫，此後該歷史區間再也不會重複請求！
+    if (env?.STOCK_DB && Array.isArray(klineData) && klineData.length > 0) {
+        try {
+            await ensureTables(env.STOCK_DB);
+            await batchInsertKLine(env.STOCK_DB, cleanSymbol, klineData);
+        } catch (saveErr) {
+            console.warn('[D1 Baseline] 首次寫入 D1 失敗:', saveErr);
+        }
+    }
+
+    // 5. 寫入 KV 快取 4 小時
     if (env?.STOCK_CACHE && Array.isArray(klineData) && klineData.length > 0) {
         try {
-            // 缓存 4 小时 (14400 秒)，大幅节省 FinMind API 配额
             await env.STOCK_CACHE.put(cacheKey, JSON.stringify(klineData), { expirationTtl: 14400 });
         } catch (e) {
             console.warn('KV write error for kline:', e);
@@ -109,7 +290,7 @@ export async function getKLine(symbol, env) {
     return klineData;
 }
 
-// --- 内部获取逻辑 ---
+// --- 內部獲取邏輯 ---
 
 async function fetchFinMindName(symbol, env) {
     const rawToken = env?.FINMIND_TOKEN;
@@ -163,7 +344,7 @@ async function fetchTencentName(symbol) {
     return symbol;
 }
 
-async function fetchFinMindKLine(symbol, env) {
+async function fetchFinMindKLine(symbol, env, startDate = '2020-01-01') {
     const rawToken = env?.FINMIND_TOKEN;
     const token = typeof rawToken === 'string' ? rawToken.trim() : '';
     const headers = {
@@ -173,7 +354,7 @@ async function fetchFinMindKLine(symbol, env) {
         headers['Authorization'] = `Bearer ${token}`;
     }
     const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
-    const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=2020-01-01${tokenParam}`;
+    const url = `https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${symbol}&start_date=${startDate}${tokenParam}`;
     let res = await fetch(url, { headers });
     // 若遇到 402 或 429 瞬時流控，延遲 800ms 重試一次，避開 Cloudflare 多請求併發瞬時限流
     if (res.status === 402 || res.status === 429) {
@@ -187,7 +368,7 @@ async function fetchFinMindKLine(symbol, env) {
         throw new Error(`FinMind API returned status ${res.status}`);
     }
     const json = await res.json();
-    if (json.data && json.data.length > 0) {
+    if (json.data && Array.isArray(json.data) && json.data.length > 0) {
         return json.data.map(item => ({
             date: item.date,
             open: Number(item.open),
@@ -197,10 +378,12 @@ async function fetchFinMindKLine(symbol, env) {
             volume: Number(item.Trading_Volume)
         }));
     }
+    // 若為增量查詢但無新數據（例如休市、假日或盤中未定案），返回空陣列而非拋錯
+    if (startDate > '2020-01-01') {
+        return [];
+    }
     throw new Error(`FinMind 沒有返回 ${symbol} 的 K 線數據`);
 }
-
-
 
 async function fetchSinaKLine(symbol) {
     const sinaSymbol = getSinaSymbol(symbol);
