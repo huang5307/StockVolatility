@@ -238,45 +238,27 @@ export function runBacktest(kline, opts = {}) {
             // 當日向上穿過該網格線，且前一日收盤低於該網格線
             if (dayHigh >= line && prevClose < line) {
                 if (currentStockUnits - orderQuantityUnits >= minStockUnits && openPositions.length > 0 && line <= upperPrice) {
-                    // 正統網格配對：尋找買入價低於當前賣出價 (buyPrice < line) 的持倉單，優先配對網格買入單 (id > 0) 且買入價最接近且低於本檔的持倉
+                    // 正統網格配對：尋找買入價低於當前賣出價 (buyPrice < line) 的持倉單，優先配對買入價最接近且低於本檔的持倉（低買高賣獲利平倉）
                     let bestIdx = -1;
                     let maxBuyBelow = -1;
                     for (let p = 0; p < openPositions.length; p++) {
                         if (openPositions[p].buyPrice < line) {
-                            const isGridOrder = openPositions[p].id > 0;
-                            const bestIsGridOrder = bestIdx !== -1 && openPositions[bestIdx].id > 0;
-                            if (!bestIsGridOrder && isGridOrder) {
+                            if (openPositions[p].buyPrice > maxBuyBelow) {
                                 maxBuyBelow = openPositions[p].buyPrice;
                                 bestIdx = p;
-                            } else if ((bestIsGridOrder && isGridOrder) || (!bestIsGridOrder && !isGridOrder)) {
-                                if (openPositions[p].buyPrice > maxBuyBelow) {
-                                    maxBuyBelow = openPositions[p].buyPrice;
-                                    bestIdx = p;
-                                }
                             }
                         }
                     }
 
                     if (bestIdx !== -1) {
-                        const matchedBuy = openPositions[bestIdx];
+                        const matchedBuy = openPositions.splice(bestIdx, 1)[0];
                         const sellShares = Math.min(currentShares, sharesPerTrade);
                         const revenue = sellShares * line;
 
                         cash += revenue;
                         currentStockUnits -= orderQuantityUnits;
                         currentShares -= sellShares;
-
-                        if (matchedBuy.id > 0) {
-                            currentGridCashDeployed = Math.max(0, currentGridCashDeployed - sellShares * matchedBuy.buyPrice);
-                        }
-
-                        if (matchedBuy.shares > sellShares) {
-                            matchedBuy.shares -= sellShares;
-                            matchedBuy.units -= orderQuantityUnits;
-                        } else {
-                            openPositions.splice(bestIdx, 1);
-                        }
-
+                        currentGridCashDeployed = Math.max(0, currentGridCashDeployed - sellShares * matchedBuy.buyPrice);
                         closedTrades++;
 
                         const pnl = (line - matchedBuy.buyPrice) * sellShares;
