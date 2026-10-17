@@ -184,7 +184,61 @@ const assert = require('assert');
     assert.strictEqual(has28Pct, true, '自訂跳動間距 2.8% 應自動納入尋優掃描結果中');
     console.log('自訂交易條件尋優測試通過，2.8% 自訂間距已成功納入掃描排行！');
 
-    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件」單測全部通過！');
+    console.log('--- 測試 7: 最大佔用本金與套利報酬率分母公式驗證 (排除原始庫存底倉，區分台股與陸股單位乘數) ---');
+    // 台股案例 (如 00685L): 15張/筆，8層，起始價 11.96，原始持股 177張
+    const twKLine = [
+        { date: '2024-01-01', high: 12.0, low: 11.9, close: 11.96 },
+        { date: '2024-01-02', high: 11.9, low: 11.5, close: 11.55 },
+        { date: '2024-01-03', high: 12.1, low: 11.6, close: 12.00 }
+    ];
+    const twRes = runBacktest(twKLine, {
+        symbol: '00685L',
+        gridPercent: 3.0,
+        orderQuantity: 15, // 15 張
+        initialStock: 177, // 原始底倉 177 張 (價值約 2,116,920，絕不可計入網格佔用本金！)
+        minStock: 177,
+        maxGridLayers: 8
+    });
+
+    const expectedTwBudget = 8 * 15 * 1000 * 11.96; // 1,435,200
+    console.log('台股網格最大佔用本金計算驗證:', {
+        計算本金: twRes.maxCapitalDeployed,
+        預期本金: expectedTwBudget,
+        套利純利潤: twRes.realizedProfit,
+        套利報酬率: `${(twRes.gridReturn * 100).toFixed(2)}%`
+    });
+    assert.strictEqual(twRes.maxCapitalDeployed, expectedTwBudget, '台股網格最大佔用本金應為 8 * 15 * 1000 * 11.96 = 1,435,200，絕不可包含原始底倉');
+    assert.strictEqual(twRes.gridReturn, Number((twRes.realizedProfit / expectedTwBudget).toFixed(4)), '套利報酬率分母必須為 8層預備本金 1,435,200');
+
+    // 陸股案例 (如 600519): 2手/筆，8層，起始價 100，原始持股 10手 (1手 = 100股)
+    const cnKLine = [
+        { date: '2024-01-01', high: 101.0, low: 99.0, close: 100.0 },
+        { date: '2024-01-02', high: 99.0, low: 96.0, close: 96.5 },
+        { date: '2024-01-03', high: 102.0, low: 97.0, close: 101.0 }
+    ];
+    const cnRes = runBacktest(cnKLine, {
+        symbol: '600519',
+        gridPercent: 3.0,
+        orderQuantity: 2, // 2 手
+        initialStock: 10, // 原始持股 10 手 (一手100股)
+        minStock: 10,
+        maxGridLayers: 8
+    });
+    const expectedCnBudget = 8 * 2 * 100 * 100.0; // 160,000
+    console.log('陸股網格最大佔用本金計算驗證:', {
+        單位: cnRes.unitInfo.unitName,
+        乘數: cnRes.unitInfo.multiplier,
+        計算本金: cnRes.maxCapitalDeployed,
+        預期本金: expectedCnBudget,
+        套利純利潤: cnRes.realizedProfit,
+        套利報酬率: `${(cnRes.gridReturn * 100).toFixed(2)}%`
+    });
+    assert.strictEqual(cnRes.unitInfo.unitName, '手', '陸股單位應為「手」');
+    assert.strictEqual(cnRes.unitInfo.multiplier, 100, '陸股每手乘數應為 100 股');
+    assert.strictEqual(cnRes.maxCapitalDeployed, expectedCnBudget, '陸股網格最大佔用本金應為 8 * 2 * 100 * 100 = 160,000');
+    assert.strictEqual(cnRes.gridReturn, Number((cnRes.realizedProfit / expectedCnBudget).toFixed(4)), '陸股套利報酬率分母必須為 160,000');
+
+    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件 + 排除原始庫存本金公式」單測全部通過！');
 })().catch(err => {
     console.error('測試失敗:', err);
     process.exit(1);

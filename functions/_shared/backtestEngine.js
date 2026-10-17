@@ -140,8 +140,11 @@ export function runBacktest(kline, opts = {}) {
     let executedBuys = 0;
 
     let realizedProfit = 0; // 累計網格波動套利純利潤 ($)
-    let currentCapitalDeployed = currentStockUnits * sharesPerTrade > 0 ? currentShares * initialPrice : 0;
-    let maxCapitalDeployed = currentCapitalDeployed > 0 ? currentCapitalDeployed : sharesPerTrade * initialPrice;
+    // 網格最大預備本金 (Grid Budget Capital): 嚴格由「最大承接層數 * 每次買賣數量 * 單位乘數 * 起始每股股價」決定，絕不包含原始持股底倉
+    // 台股：1張 = 1,000股；陸股：1手 = 100股
+    const gridBudgetCapital = maxGridLayers * sharesPerTrade * initialPrice;
+    let currentGridCashDeployed = 0; // 回測中網格實際佔用資金動態追蹤 (僅追蹤網格買進部位，不含原始底倉)
+    let peakGridCashDeployed = 0;    // 回測期間網格實際動用資金峰值
 
     // 記錄第 0 天權益
     equityCurve.push({
@@ -186,9 +189,9 @@ export function runBacktest(kline, opts = {}) {
                             gridLine: line
                         });
 
-                        currentCapitalDeployed += buyCost;
-                        if (currentCapitalDeployed > maxCapitalDeployed) {
-                            maxCapitalDeployed = currentCapitalDeployed;
+                        currentGridCashDeployed += buyCost;
+                        if (currentGridCashDeployed > peakGridCashDeployed) {
+                            peakGridCashDeployed = currentGridCashDeployed;
                         }
 
                         tradeRecords.push({
@@ -235,27 +238,45 @@ export function runBacktest(kline, opts = {}) {
             // 當日向上穿過該網格線，且前一日收盤低於該網格線
             if (dayHigh >= line && prevClose < line) {
                 if (currentStockUnits - orderQuantityUnits >= minStockUnits && openPositions.length > 0 && line <= upperPrice) {
-                    // 正統網格配對：尋找買入價低於當前賣出價 (buyPrice < line) 的持倉單，優先配對買入價最接近且低於本檔的持倉（低買高賣獲利平倉）
+                    // 正統網格配對：尋找買入價低於當前賣出價 (buyPrice < line) 的持倉單，優先配對網格買入單 (id > 0) 且買入價最接近且低於本檔的持倉
                     let bestIdx = -1;
                     let maxBuyBelow = -1;
                     for (let p = 0; p < openPositions.length; p++) {
                         if (openPositions[p].buyPrice < line) {
-                            if (openPositions[p].buyPrice > maxBuyBelow) {
+                            const isGridOrder = openPositions[p].id > 0;
+                            const bestIsGridOrder = bestIdx !== -1 && openPositions[bestIdx].id > 0;
+                            if (!bestIsGridOrder && isGridOrder) {
                                 maxBuyBelow = openPositions[p].buyPrice;
                                 bestIdx = p;
+                            } else if ((bestIsGridOrder && isGridOrder) || (!bestIsGridOrder && !isGridOrder)) {
+                                if (openPositions[p].buyPrice > maxBuyBelow) {
+                                    maxBuyBelow = openPositions[p].buyPrice;
+                                    bestIdx = p;
+                                }
                             }
                         }
                     }
 
                     if (bestIdx !== -1) {
-                        const matchedBuy = openPositions.splice(bestIdx, 1)[0];
+                        const matchedBuy = openPositions[bestIdx];
                         const sellShares = Math.min(currentShares, sharesPerTrade);
                         const revenue = sellShares * line;
 
                         cash += revenue;
                         currentStockUnits -= orderQuantityUnits;
                         currentShares -= sellShares;
-                        currentCapitalDeployed = Math.max(0, currentCapitalDeployed - sellShares * matchedBuy.buyPrice);
+
+                        if (matchedBuy.id > 0) {
+                            currentGridCashDeployed = Math.max(0, currentGridCashDeployed - sellShares * matchedBuy.buyPrice);
+                        }
+
+                        if (matchedBuy.shares > sellShares) {
+                            matchedBuy.shares -= sellShares;
+                            matchedBuy.units -= orderQuantityUnits;
+                        } else {
+                            openPositions.splice(bestIdx, 1);
+                        }
+
                         closedTrades++;
 
                         const pnl = (line - matchedBuy.buyPrice) * sellShares;
@@ -318,8 +339,9 @@ export function runBacktest(kline, opts = {}) {
     const remainingCost = openPositions.reduce((sum, pos) => sum + pos.shares * pos.buyPrice, 0);
     const unrealizedProfit = finalStockValue - remainingCost;
 
-    // 網格波動套利純報酬率 = 累計純套利利潤 / 網格最大動用資金
-    const safeMaxCapital = Math.max(1000, maxCapitalDeployed);
+    // 網格波動套利純報酬率 = 累計純套利利潤 / 網格最大預備本金
+    // 分母為：最大承接層數 * 每筆買賣數量 * 單位乘數 * 起始每股股價 (絕不含原始庫存底倉)
+    const safeMaxCapital = Math.max(1000, gridBudgetCapital);
     const gridReturn = realizedProfit / safeMaxCapital;
 
     // 總資產淨值報酬率 = (期末總資產 - 期初總資產) / 期初總資產
@@ -355,6 +377,8 @@ export function runBacktest(kline, opts = {}) {
         // 核心網格套利純收益指標（專注波動盈利）
         realizedProfit: Number(realizedProfit.toFixed(2)),
         maxCapitalDeployed: Number(safeMaxCapital.toFixed(2)),
+        gridBudgetCapital: Number(safeMaxCapital.toFixed(2)),
+        peakGridCashDeployed: Number(peakGridCashDeployed.toFixed(2)),
         gridReturn: Number(gridReturn.toFixed(4)),
         annualizedGridReturn: Number(annualizedGridReturn.toFixed(4)),
         avgProfitPerTrade,
@@ -454,6 +478,8 @@ export function optimizeGrid(kline, baseOpts = {}) {
                 annualizedGridReturn: res.annualizedGridReturn,
                 avgProfitPerTrade: res.avgProfitPerTrade,
                 maxCapitalDeployed: res.maxCapitalDeployed,
+                gridBudgetCapital: res.gridBudgetCapital,
+                peakGridCashDeployed: res.peakGridCashDeployed,
                 unrealizedProfit: res.unrealizedProfit,
                 finalStockUnits: res.finalStockUnits,
                 totalReturn: res.totalReturn,

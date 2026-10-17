@@ -1323,10 +1323,17 @@ document.addEventListener('DOMContentLoaded', () => {
             finalStocksEl.innerText = `剩餘持股: ${sum.finalStockUnits || 0} ${unit}`;
         }
 
-        // 4. 網格最大佔用本金
+        // 4. 網格最大佔用本金 (最大層數預備本金，絕不包含原始庫存底倉)
         const maxCapEl = document.getElementById('res-max-capital');
         if (maxCapEl) {
             maxCapEl.innerText = `$${Math.round(sum.maxCapitalDeployed).toLocaleString()}`;
+        }
+        const maxCapSubEl = document.getElementById('res-max-capital-sub');
+        if (maxCapSubEl) {
+            const peakStr = sum.peakGridCashDeployed !== undefined
+                ? `$${Math.round(sum.peakGridCashDeployed).toLocaleString()}`
+                : '--';
+            maxCapSubEl.innerText = `實際動用峰值: ${peakStr}`;
         }
 
         // 5. 跌幅考驗 / 疊層風控
