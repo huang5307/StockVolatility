@@ -73,18 +73,20 @@ export function runBacktest(kline, opts = {}) {
     const stressDropPct = Math.max(1, parseFloat(opts.stressDropPct || 20.0));
 
     // 庫存風控設定
-    const minStockUnits = Math.max(0, parseInt(opts.minStock || 0, 10));
-    const maxStockUnits = opts.maxStock !== undefined && opts.maxStock !== '' && !isNaN(opts.maxStock)
-        ? Math.max(minStockUnits + orderQuantityUnits, parseInt(opts.maxStock, 10))
-        : Math.max(minStockUnits + maxGridLayers * orderQuantityUnits, 20);
-
-    const initialStockUnitsInput = opts.initialStock !== undefined && opts.initialStock !== '' && !isNaN(opts.initialStock)
-        ? Math.max(0, parseInt(opts.initialStock, 10))
+    // 最小庫存底倉：如果沒有設定或是 0，代表不考慮底倉限制（自然底倉為 0）
+    const minStockUnits = (opts.minStock !== undefined && opts.minStock !== '' && !isNaN(opts.minStock) && Number(opts.minStock) > 0)
+        ? parseInt(opts.minStock, 10)
         : 0;
 
-    // 若原始庫存為0，實盤策略首日自動建倉1筆底倉，避免單邊上漲時空倉無法獲利
-    const autoBase = initialStockUnitsInput === 0;
-    const initialStockUnits = autoBase ? orderQuantityUnits : initialStockUnitsInput;
+    // 庫存上限：超過之後就不買；如果沒有設定或是 0，代表不考慮此條件（無上限限制）
+    const maxStockUnits = (opts.maxStock !== undefined && opts.maxStock !== '' && !isNaN(opts.maxStock) && Number(opts.maxStock) > 0)
+        ? Math.max(minStockUnits + orderQuantityUnits, parseInt(opts.maxStock, 10))
+        : Infinity;
+
+    // 原始庫存：如果沒有設定或是 0，代表不考慮原始持股（從 0 開始）
+    const initialStockUnits = (opts.initialStock !== undefined && opts.initialStock !== '' && !isNaN(opts.initialStock) && Number(opts.initialStock) > 0)
+        ? parseInt(opts.initialStock, 10)
+        : 0;
 
     const initialPrice = Number(kline[0].close);
     const defaultEstimatedCash = (maxGridLayers + 2) * sharesPerTrade * initialPrice * 1.1;
@@ -109,7 +111,7 @@ export function runBacktest(kline, opts = {}) {
             buyPrice: initialPrice,
             shares: currentShares,
             units: currentStockUnits,
-            note: autoBase ? '首日建立底倉' : '原始庫存底倉'
+            note: '原始庫存底倉'
         });
     }
 
@@ -343,7 +345,7 @@ export function runBacktest(kline, opts = {}) {
             orderQuantityUnits,
             initialStockUnits,
             minStockUnits,
-            maxStockUnits,
+            maxStockUnits: isFinite(maxStockUnits) ? maxStockUnits : 0,
             lowerPrice,
             upperPrice,
             initialCash,

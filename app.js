@@ -90,6 +90,47 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // 標的專屬交易條件記憶 (依據股票/ETF代號獨立保存，切換時自動繼承)
+    const PER_STOCK_SETTINGS_KEY = 'stock_grid_per_stock_settings';
+
+    const getStockSettings = (code) => {
+        if (!code) return null;
+        try {
+            const all = JSON.parse(localStorage.getItem(PER_STOCK_SETTINGS_KEY)) || {};
+            return all[code.toUpperCase()] || null;
+        } catch (e) {
+            return null;
+        }
+    };
+
+    const saveCurrentStockSettings = () => {
+        const code = currentLoadedStock?.code || stockCodeInput?.value.trim().split(' ')[0];
+        if (!code) return;
+        try {
+            const all = JSON.parse(localStorage.getItem(PER_STOCK_SETTINGS_KEY)) || {};
+            all[code.toUpperCase()] = {
+                gridPercent: btGridPercent?.value || '3.0',
+                orderQuantity: btOrderQuantity?.value || '1',
+                initialStock: btInitialStock?.value || '0',
+                maxStock: btMaxStock?.value || '',
+                minStock: btMinStock?.value || '0',
+                lowerPrice: btLowerPrice?.value || '',
+                upperPrice: btUpperPrice?.value || ''
+            };
+            localStorage.setItem(PER_STOCK_SETTINGS_KEY, JSON.stringify(all));
+        } catch (e) {
+            console.warn('儲存標的交易條件失敗:', e);
+        }
+    };
+
+    // 監聽交易條件表單中任一輸入變動，即時自動存入瀏覽器
+    [btGridPercent, btOrderQuantity, btInitialStock, btMaxStock, btMinStock, btLowerPrice, btUpperPrice].forEach(input => {
+        if (input) {
+            input.addEventListener('change', saveCurrentStockSettings);
+            input.addEventListener('input', saveCurrentStockSettings);
+        }
+    });
+
     const labelOrderQuantity = document.getElementById('label-order-quantity');
     const labelInitialStock = document.getElementById('label-initial-stock');
     const labelMaxStock = document.getElementById('label-max-stock');
@@ -848,12 +889,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const maxPrice = Math.max(...prices);
         const lastClose = data[data.length - 1].close;
 
-        // 切換不同股票時，清空殘留的舊價格區間，避免舊標的價格範圍阻擋新標的交易
-        if (!currentLoadedStock || currentLoadedStock.code !== code) {
-            if (btLowerPrice) btLowerPrice.value = '';
-            if (btUpperPrice) btUpperPrice.value = '';
-        }
-
         currentLoadedStock = {
             code,
             name,
@@ -865,13 +900,28 @@ document.addEventListener('DOMContentLoaded', () => {
             endDate: data[data.length - 1].date
         };
 
-        if (btLowerPrice) btLowerPrice.placeholder = `最低: $${minPrice.toFixed(2)}`;
-        if (btUpperPrice) btUpperPrice.placeholder = `最高: $${maxPrice.toFixed(2)}`;
+        // 依據股票代號載入專屬條件；若此股票有存檔則繼承，否則載入乾淨初始預設值
+        const saved = getStockSettings(code);
+        if (saved) {
+            if (btGridPercent) btGridPercent.value = saved.gridPercent !== undefined ? saved.gridPercent : '3.0';
+            if (btOrderQuantity) btOrderQuantity.value = saved.orderQuantity !== undefined ? saved.orderQuantity : '1';
+            if (btInitialStock) btInitialStock.value = saved.initialStock !== undefined ? saved.initialStock : '0';
+            if (btMaxStock) btMaxStock.value = saved.maxStock !== undefined ? saved.maxStock : '';
+            if (btMinStock) btMinStock.value = saved.minStock !== undefined ? saved.minStock : '0';
+            if (btLowerPrice) btLowerPrice.value = saved.lowerPrice !== undefined ? saved.lowerPrice : '';
+            if (btUpperPrice) btUpperPrice.value = saved.upperPrice !== undefined ? saved.upperPrice : '';
+        } else {
+            if (btGridPercent) btGridPercent.value = '3.0';
+            if (btOrderQuantity) btOrderQuantity.value = '1';
+            if (btInitialStock) btInitialStock.value = '0';
+            if (btMaxStock) btMaxStock.value = '';
+            if (btMinStock) btMinStock.value = '0';
+            if (btLowerPrice) btLowerPrice.value = '';
+            if (btUpperPrice) btUpperPrice.value = '';
+        }
 
-        // 預設充足現金估算 (例如 10 張股票預備資金)
-        const unitMultiplier = isTaiwanCode(code) ? 1000 : 100;
-        const estimatedCash = Math.round(lastClose * unitMultiplier * 10 * 1.2);
-        if (btInitialCash) btInitialCash.placeholder = `預設建議: $${estimatedCash.toLocaleString()}`;
+        if (btLowerPrice) btLowerPrice.placeholder = `留空或0不限 (最低 $${minPrice.toFixed(2)})`;
+        if (btUpperPrice) btUpperPrice.placeholder = `留空或0不限 (最高 $${maxPrice.toFixed(2)})`;
 
         updateUnitLabels(code);
     };
@@ -1023,7 +1073,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 套用特定間距並直接執行回測
     const applyGridPercentAndRun = (percent) => {
-        btGridPercent.value = percent;
+        if (btGridPercent) btGridPercent.value = percent;
+        saveCurrentStockSettings();
         showStatus(`已套用建議跳動間距 ${percent}%，正在執行精準回測...`, 'info');
         backtestForm.dispatchEvent(new Event('submit', { cancelable: true }));
         // 滾動至回測結果圖表
@@ -1099,6 +1150,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 執行自訂條件單回測
     const handleBacktest = async (e) => {
         e.preventDefault();
+        saveCurrentStockSettings();
         const stockCodeWithPossibleName = stockCodeInput.value.trim();
         const stockCode = stockCodeWithPossibleName.split(' ')[0];
         if (!stockCode) {

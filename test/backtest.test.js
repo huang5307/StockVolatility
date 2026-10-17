@@ -129,7 +129,41 @@ const assert = require('assert');
     assert.ok(lowCashRes.tradeRecords.some(r => r.type === 'missed_buy'), '成交流水應包含資金斷糧警告紀錄');
     assert.strictEqual(typeof lowCashRes.starvationPrice, 'number', '應提供臨界斷糧價格');
 
-    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦」風控模型單測全部通過！');
+    console.log('--- 測試 5: 庫存上限 (超過之後就不買；0或未設定為不考慮) ---');
+    const continuousDropKLine = [
+        { date: '2024-01-01', high: 100, low: 100, close: 100 },
+        { date: '2024-01-02', high: 97, low: 94, close: 95 }, // 第1買
+        { date: '2024-01-03', high: 93, low: 89, close: 90 }, // 第2買
+        { date: '2024-01-04', high: 88, low: 84, close: 85 }  // 第3買
+    ];
+
+    // 設定庫存上限為 1 張 (超過就不買)
+    const cappedRes = runBacktest(continuousDropKLine, {
+        symbol: '2330',
+        gridPercent: 3.0,
+        orderQuantity: 1,
+        initialStock: 0,
+        maxStock: 1,
+        initialCash: 1000000
+    });
+    const cappedBuys = cappedRes.tradeRecords.filter(t => t.type === 'buy').length;
+    console.log('受庫存上限限制的買進次數 (上限1張):', cappedBuys);
+    assert.strictEqual(cappedBuys, 1, '庫存上限為 1 張時，達到上限後續下跌不應再買進');
+
+    // 未設定庫存上限 (0 或空)，應不考慮上限限制
+    const uncappedRes = runBacktest(continuousDropKLine, {
+        symbol: '2330',
+        gridPercent: 3.0,
+        orderQuantity: 1,
+        initialStock: 0,
+        maxStock: 0,
+        initialCash: 1000000
+    });
+    const uncappedBuys = uncappedRes.tradeRecords.filter(t => t.type === 'buy').length;
+    console.log('未設定庫存上限時的買進次數 (0代表無限制):', uncappedBuys);
+    assert.ok(uncappedBuys > 1, '未設定庫存上限時，後續觸網買單應正常買進');
+
+    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件」單測全部通過！');
 })().catch(err => {
     console.error('測試失敗:', err);
     process.exit(1);
