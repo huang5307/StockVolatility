@@ -58,11 +58,19 @@ export function runBacktest(kline, opts = {}) {
         upperPrice = Number((maxHistoryPrice * 1.08).toFixed(2));
     }
 
-    // 生成蛛網網格線：向下 * (1 - ratio)，向上 * (1 + ratio)，以起始基準價為錨點
+    // 生成蛛網網格線：向下 * (1 - ratio)，向上 * (1 + ratio)
     const ratio = gridPercent / 100;
-    const basePrice = (opts.basePrice !== undefined && opts.basePrice !== '' && !isNaN(opts.basePrice) && Number(opts.basePrice) > 0)
-        ? Number(opts.basePrice)
-        : initialPrice;
+    let basePrice = initialPrice;
+    if (opts.basePrice !== undefined && opts.basePrice !== '' && !isNaN(opts.basePrice) && Number(opts.basePrice) > 0) {
+        basePrice = Number(opts.basePrice);
+    } else if (lowerPrice > 0 && lowerPrice < initialPrice) {
+        // 若設定了區間下限 lowerPrice 且低於 initialPrice，則以 lowerPrice 為基底對齊至最接近且不超過 initialPrice 之網格檔位
+        // 例如 lowerPrice = 8.8, initialPrice = 12.08, ratio = 0.04 -> k = floor(ln(12.08 / 8.8) / ln(1.04)) = 8 -> 8.8 * 1.04^8 = 12.0434
+        const k = Math.floor(Math.log(initialPrice / lowerPrice) / Math.log(1 + ratio));
+        if (k >= 0) {
+            basePrice = Number((lowerPrice * Math.pow(1 + ratio, k)).toFixed(4));
+        }
+    }
 
     const downLines = [];
     let curDown = basePrice;
@@ -118,19 +126,8 @@ export function runBacktest(kline, opts = {}) {
     const totalInitialEquity = cash + initialStockValue;
 
     // 未平倉網格持倉單池 (專屬配對撮合)
+    // 注意：原始庫存底倉 (initialStock) 屬於被動持股底倉，絕不可混入網格低吸單池中被一次性全部平倉賣出
     const openPositions = [];
-    if (currentStockUnits > 0) {
-        openPositions.push({
-            id: 0,
-            date: kline[0].date,
-            buyPrice: initialPrice,
-            shares: currentShares,
-            units: currentStockUnits,
-            gridLine: initialPrice,
-            targetSellPrice: Number((initialPrice * (1 + ratio)).toFixed(4)),
-            note: '原始庫存底倉'
-        });
-    }
 
     const tradeRecords = [];
     const equityCurve = [];
@@ -337,7 +334,11 @@ export function runBacktest(kline, opts = {}) {
     const finalEquity = cash + finalStockValue;
     
     // 剩餘持倉浮動盈虧 = 剩餘持股市值 - 剩餘持股買入成本
-    const remainingCost = openPositions.reduce((sum, pos) => sum + pos.shares * pos.buyPrice, 0);
+    // 原始庫存底倉成本以 initialPrice 計算，網格加倉部位以實際買入成本計算
+    const gridRemainingCost = openPositions.reduce((sum, pos) => sum + pos.shares * pos.buyPrice, 0);
+    const initialRemainingUnits = Math.min(initialStockUnits, currentStockUnits);
+    const initialRemainingCost = initialRemainingUnits * multiplier * initialPrice;
+    const remainingCost = initialRemainingCost + gridRemainingCost;
     const unrealizedProfit = finalStockValue - remainingCost;
 
     // 網格最大預備本金 (Grid Budget Capital): 嚴格由「最大承接層數 * 每次買賣數量 * 單位乘數 * 起始每股股價」決定，絕不包含原始持股底倉
