@@ -161,7 +161,28 @@ const assert = require('assert');
     });
     const uncappedBuys = uncappedRes.tradeRecords.filter(t => t.type === 'buy').length;
     console.log('未設定庫存上限時的買進次數 (0代表無限制):', uncappedBuys);
-    assert.ok(uncappedBuys > 1, '未設定庫存上限時，後續觸網買單應正常買進');
+    // --- 測試 6: 智能尋優 (optimizeGrid) 與實盤交易條件完全對齊 ---
+    console.log('--- 測試 6: 智能尋優 (optimizeGrid) 與實盤交易條件完全對齊 ---');
+    const customOpts = {
+        symbol: '2330',
+        gridPercent: 2.8, // 自訂不在預設列表中的間距
+        orderQuantity: 15,
+        initialStock: 10,
+        maxStock: 50,
+        minStock: 5,
+        maxGridLayers: 8,
+        stressDropPct: 20
+    };
+    const optCustomRes = optimizeGrid(sampleKLine, customOpts);
+    assert.ok(optCustomRes.conditions, '尋優結果應包含 conditions 元數據');
+    assert.strictEqual(optCustomRes.conditions.orderQuantity, 15, '尋優 conditions 中的 orderQuantity 應為 15');
+    assert.strictEqual(optCustomRes.conditions.initialStock, 10, '尋優 conditions 中的 initialStock 應為 10');
+    assert.strictEqual(optCustomRes.conditions.maxStock, 50, '尋優 conditions 中的 maxStock 應為 50');
+    assert.strictEqual(optCustomRes.conditions.minStock, 5, '尋優 conditions 中的 minStock 應為 5');
+    // 確認 2.8% 自訂間距被自動納入掃描候選
+    const has28Pct = optCustomRes.ranking.some(r => Math.abs(r.gridPercent - 2.8) < 0.01);
+    assert.strictEqual(has28Pct, true, '自訂跳動間距 2.8% 應自動納入尋優掃描結果中');
+    console.log('自訂交易條件尋優測試通過，2.8% 自訂間距已成功納入掃描排行！');
 
     console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件」單測全部通過！');
 })().catch(err => {

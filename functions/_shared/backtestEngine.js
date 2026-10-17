@@ -413,10 +413,17 @@ export function optimizeGrid(kline, baseOpts = {}) {
     const sharesPerTrade = orderQuantityUnits * unitInfo.multiplier;
     const uniformInitialCash = baseOpts.initialCash !== undefined && baseOpts.initialCash !== '' && !isNaN(baseOpts.initialCash)
         ? Number(baseOpts.initialCash)
-        : Math.max(150000, Math.round(sharesPerTrade * initialPrice * (maxGridLayers + 2) * 1.1));
+        : Math.max(100000, Math.round(sharesPerTrade * initialPrice * (maxGridLayers + 2) * 1.1));
 
-    // 常用間距掃描梯度
+    // 常用間距掃描梯度，並自動納入當前表單設定的跳動間距（若有）
     const candidatePercents = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0];
+    if (baseOpts.gridPercent !== undefined && baseOpts.gridPercent !== '' && !isNaN(baseOpts.gridPercent)) {
+        const userPct = Number(parseFloat(baseOpts.gridPercent).toFixed(1));
+        if (!candidatePercents.includes(userPct)) {
+            candidatePercents.push(userPct);
+            candidatePercents.sort((a, b) => a - b);
+        }
+    }
     
     // 計算歷史真實波幅 (ATR % 均值)
     let trSum = 0;
@@ -505,6 +512,17 @@ export function optimizeGrid(kline, baseOpts = {}) {
         avgDailyVolatilityPct,
         maxGridLayers,
         stressDropPct,
+        currentGridPercent: (baseOpts.gridPercent !== undefined && baseOpts.gridPercent !== '' && !isNaN(baseOpts.gridPercent)) ? Number(parseFloat(baseOpts.gridPercent).toFixed(1)) : undefined,
+        conditions: {
+            orderQuantity: orderQuantityUnits,
+            initialStock: baseOpts.initialStock !== undefined && baseOpts.initialStock !== '' ? parseInt(baseOpts.initialStock, 10) : 0,
+            maxStock: baseOpts.maxStock !== undefined && baseOpts.maxStock !== '' ? parseInt(baseOpts.maxStock, 10) : undefined,
+            minStock: baseOpts.minStock !== undefined && baseOpts.minStock !== '' ? parseInt(baseOpts.minStock, 10) : 0,
+            lowerPrice: baseOpts.lowerPrice !== undefined && baseOpts.lowerPrice !== '' ? parseFloat(baseOpts.lowerPrice) : undefined,
+            upperPrice: baseOpts.upperPrice !== undefined && baseOpts.upperPrice !== '' ? parseFloat(baseOpts.upperPrice) : undefined,
+            maxGridLayers,
+            stressDropPct
+        },
         recommendations: {
             bestReturn: bestReturnConfig,
             bestBalanced: bestBalancedConfig,

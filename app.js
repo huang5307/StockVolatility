@@ -123,11 +123,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // 監聽交易條件表單中任一輸入變動，即時自動存入瀏覽器
+    // 智能防抖自動重算尋優（當使用者更改表單條件或全局風控時自動觸發）
+    let optDebounceTimer = null;
+    const triggerDebouncedAutoOptimization = (delay = 400) => {
+        if (!currentLoadedStock) return;
+        if (optDebounceTimer) clearTimeout(optDebounceTimer);
+        optDebounceTimer = setTimeout(() => {
+            triggerAutoOptimization();
+        }, delay);
+    };
+
+    // 監聽交易條件表單中任一輸入變動，即時自動存入瀏覽器並自動觸發參數尋優重新計算
     [btGridPercent, btOrderQuantity, btInitialStock, btMaxStock, btMinStock, btLowerPrice, btUpperPrice].forEach(input => {
         if (input) {
-            input.addEventListener('change', saveCurrentStockSettings);
-            input.addEventListener('input', saveCurrentStockSettings);
+            input.addEventListener('change', () => {
+                saveCurrentStockSettings();
+                triggerDebouncedAutoOptimization(200);
+            });
+            input.addEventListener('input', () => {
+                saveCurrentStockSettings();
+                triggerDebouncedAutoOptimization(500);
+            });
         }
     });
 
@@ -139,6 +155,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // 智能參數尋優元件
     const btnRunOptimize = document.getElementById('btn-run-optimize');
     const optSpinner = document.getElementById('opt-spinner');
+    const optimizeConditionsBadge = document.getElementById('optimize-conditions-badge');
     const optimizeRecCards = document.getElementById('optimize-recommendation-cards');
     const optimizeChartContainer = document.getElementById('optimize-chart-container');
     const optimizeTableContainer = document.getElementById('optimize-table-container');
@@ -949,6 +966,7 @@ document.addEventListener('DOMContentLoaded', () => {
             kline: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.kline : undefined,
             startDate: startDateInput ? startDateInput.value : '',
             endDate: endDateInput ? endDateInput.value : '',
+            gridPercent: btGridPercent && btGridPercent.value ? parseFloat(btGridPercent.value) : 3.0,
             orderQuantity: btOrderQuantity ? btOrderQuantity.value : 1,
             initialStock: btInitialStock ? btInitialStock.value : 0,
             maxStock: btMaxStock ? btMaxStock.value : '',
@@ -997,6 +1015,23 @@ document.addEventListener('DOMContentLoaded', () => {
         if (thLayersAbsorbed) thLayersAbsorbed.innerText = `${maxLayers}層極限抗跌`;
         if (thStressNeeded) thStressNeeded.innerText = `抗${stressDrop}%所需層數`;
 
+        // 顯示當前依據的實盤條件標籤
+        if (optimizeConditionsBadge) {
+            const cond = data.conditions || {};
+            const parts = [];
+            parts.push(`每筆買賣 <strong>${cond.orderQuantity || 1} ${unit}</strong>`);
+            if (cond.initialStock) parts.push(`原始持股 <strong>${cond.initialStock} ${unit}</strong>`);
+            if (cond.maxStock) parts.push(`庫存上限 <strong>${cond.maxStock} ${unit}</strong>`);
+            if (cond.minStock) parts.push(`底倉限制 <strong>${cond.minStock} ${unit}</strong>`);
+            if (cond.lowerPrice || cond.upperPrice) {
+                parts.push(`價格區間 <strong>$${cond.lowerPrice || '0'} ~ $${cond.upperPrice || '不限'}</strong>`);
+            }
+            parts.push(`<strong>${maxLayers}層</strong>承接`);
+            parts.push(`防跌 <strong>${stressDrop}%</strong>`);
+            optimizeConditionsBadge.innerHTML = `當前尋優依據：${parts.join(' | ')}`;
+            optimizeConditionsBadge.style.display = 'block';
+        }
+
         // 1. 最高套利純獲利配置
         const br = rec.bestReturn;
         recBestReturnTitle.innerText = `跳動間距 ${br.gridPercent}%`;
@@ -1031,8 +1066,10 @@ document.addEventListener('DOMContentLoaded', () => {
         btnApplyBestBalanced.onclick = () => applyGridPercentAndRun(bb.gridPercent);
         btnApplyAtr.onclick = () => applyGridPercentAndRun(atrPct);
 
+        const currentFormGridPct = btGridPercent && btGridPercent.value ? parseFloat(btGridPercent.value) : 3.0;
+
         // 渲染參數效益柱狀對比圖
-        renderOptimizationChart(data.ranking);
+        renderOptimizationChart(data.ranking, currentFormGridPct, data.conditions, unit);
 
         // 渲染排行表格 (對應 10 欄表頭)
         optimizeTableBody.innerHTML = '';
@@ -1043,14 +1080,25 @@ document.addEventListener('DOMContentLoaded', () => {
             const avgProfitStr = Math.round(item.avgProfitPerTrade || (item.closedTrades > 0 ? item.realizedProfit / item.closedTrades : 0)).toLocaleString();
             const isBest = item.gridPercent === br.gridPercent;
             const isBalanced = item.gridPercent === bb.gridPercent;
-            tr.className = isBest ? 'table-success fw-bold' : (isBalanced ? 'table-info fw-semibold' : '');
+            const isCurrentForm = Math.abs(item.gridPercent - currentFormGridPct) < 0.05;
+
+            let rowClass = '';
+            if (isCurrentForm) rowClass = 'table-primary fw-bold';
+            else if (isBest) rowClass = 'table-success fw-bold';
+            else if (isBalanced) rowClass = 'table-info fw-semibold';
+            tr.className = rowClass;
 
             const riskBadge = item.isDangerous
                 ? `<span class="badge bg-danger-subtle text-danger border border-danger">⚠️ 易擊穿</span>`
                 : `<span class="badge bg-success-subtle text-success border border-success">🛡️ 安全合格</span>`;
 
+            let badges = [];
+            if (isCurrentForm) badges.push('<span class="badge bg-primary">當前回測條件</span>');
+            if (isBest) badges.push('🏆');
+            if (isBalanced) badges.push('🛡️');
+
             tr.innerHTML = `
-                <td>${item.gridPercent}% ${isBest ? '🏆' : (isBalanced ? '🛡️' : '')}</td>
+                <td>${item.gridPercent}% ${badges.join(' ')}</td>
                 <td class="text-profit fw-bold">+$${profitStr}</td>
                 <td class="text-success fw-bold">+${gridRetPct}%</td>
                 <td>${item.closedTrades} 筆</td>
@@ -1059,7 +1107,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td><span class="fw-semibold">${item.layersNeededForStress} 層</span></td>
                 <td>${riskBadge}</td>
                 <td>$${Math.round(item.maxCapitalDeployed).toLocaleString()}</td>
-                <td><button class="btn btn-sm ${isBest ? 'btn-success' : 'btn-outline-primary'} py-0 px-2 btn-apply-row" data-percent="${item.gridPercent}">套用</button></td>
+                <td><button class="btn btn-sm ${isCurrentForm ? 'btn-primary' : (isBest ? 'btn-success' : 'btn-outline-primary')} py-0 px-2 btn-apply-row" data-percent="${item.gridPercent}">套用</button></td>
             `;
             optimizeTableBody.appendChild(tr);
         });
@@ -1082,23 +1130,43 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // 繪製參數效益柱狀圖
-    const renderOptimizationChart = (ranking) => {
+    const renderOptimizationChart = (ranking, currentFormGridPct = 3.0, conditions = {}, unit = '張') => {
         const sortedByPercent = [...ranking].sort((a, b) => a.gridPercent - b.gridPercent);
         const xPercents = sortedByPercent.map(r => `${r.gridPercent}%`);
-        const profitData = sortedByPercent.map(r => Math.round(r.realizedProfit));
+        const profitData = sortedByPercent.map(r => {
+            const isCurrent = Math.abs(r.gridPercent - currentFormGridPct) < 0.05;
+            return {
+                value: Math.round(r.realizedProfit),
+                itemStyle: {
+                    color: isCurrent ? '#0d6efd' : '#198754'
+                }
+            };
+        });
         const gridReturnData = sortedByPercent.map(r => Number((r.gridReturn * 100).toFixed(2)));
+
+        const subParts = [];
+        if (conditions.orderQuantity) subParts.push(`每筆買賣 ${conditions.orderQuantity} ${unit}`);
+        if (conditions.initialStock) subParts.push(`原始持股 ${conditions.initialStock} ${unit}`);
+        if (conditions.maxStock) subParts.push(`上限 ${conditions.maxStock} ${unit}`);
+        if (conditions.minStock) subParts.push(`底倉 ${conditions.minStock} ${unit}`);
+        if (conditions.maxGridLayers) subParts.push(`${conditions.maxGridLayers}層承接`);
+        const subtext = subParts.length > 0 ? `計算條件基準：${subParts.join(' | ')} (藍色柱為當前回測設定)` : '';
 
         const option = {
             title: {
                 text: '各跳動間距 (%) 波動套利純獲利與套利報酬率對比圖 (尋找最高效益甜蜜點)',
+                subtext: subtext,
                 left: 'center',
-                textStyle: { fontSize: 14, fontWeight: 500 }
+                textStyle: { fontSize: 14, fontWeight: 600 },
+                subtextStyle: { fontSize: 11, color: '#6c757d' }
             },
             tooltip: {
                 trigger: 'axis',
                 axisPointer: { type: 'shadow' },
                 formatter: function (params) {
-                    let html = `<strong>跳動間距: ${params[0].name}</strong><br/>`;
+                    const pct = parseFloat(params[0].name);
+                    const isCurrent = Math.abs(pct - currentFormGridPct) < 0.05;
+                    let html = `<strong>跳動間距: ${params[0].name}${isCurrent ? ' <span class="badge bg-primary">當前回測條件</span>' : ''}</strong><br/>`;
                     params.forEach(p => {
                         if (p.seriesName.includes('純獲利')) {
                             html += `${p.marker} ${p.seriesName}: <strong>+$${p.value.toLocaleString()}</strong><br/>`;
@@ -1111,7 +1179,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             },
             legend: { data: ['波動套利純獲利 ($)', '套利報酬率 (%)'], bottom: 0 },
-            grid: { left: '8%', right: '8%', top: '18%', bottom: '18%' },
+            grid: { left: '8%', right: '8%', top: '22%', bottom: '18%' },
             xAxis: { type: 'category', data: xPercents, name: '網格間距' },
             yAxis: [
                 { type: 'value', name: '純獲利 ($)', axisLabel: { formatter: function(v) { return `$${v.toLocaleString()}`; } } },
@@ -1121,18 +1189,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 {
                     name: '波動套利純獲利 ($)',
                     type: 'bar',
-                    data: profitData,
-                    itemStyle: {
-                        color: '#198754'
-                    }
+                    data: profitData
                 },
                 {
                     name: '套利報酬率 (%)',
                     type: 'line',
                     yAxisIndex: 1,
                     data: gridReturnData,
-                    lineStyle: { color: '#0d6efd', width: 3 },
-                    itemStyle: { color: '#0d6efd' }
+                    lineStyle: { color: '#ff7300', width: 3 },
+                    itemStyle: { color: '#ff7300' }
                 }
             ]
         };
@@ -1144,7 +1209,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pct = parseFloat(params.name);
                 applyGridPercentAndRun(pct);
             }
-        });
     };
 
     // 執行自訂條件單回測
@@ -1202,6 +1266,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const profitStr = Math.round(data.summary.realizedProfit).toLocaleString();
             const avgP = Math.round(data.summary.avgProfitPerTrade || (data.summary.closedTrades > 0 ? data.summary.realizedProfit / data.summary.closedTrades : 0)).toLocaleString();
             showStatus(`回測完成！${data.symbol} (${data.stockName}) 間距 ${data.initialParams.gridPercent}%，波動套利純獲利: +$${profitStr} (平倉套利 ${data.summary.closedTrades} 筆，平均每筆 +$${avgP})`, 'success');
+            // 回測執行成功後，即時觸發一次尋優計算以同步上方長條圖與排行報告
+            triggerDebouncedAutoOptimization(0);
         } catch (err) {
             showStatus(`回測執行發生異常: ${err.message}`, 'danger');
         } finally {

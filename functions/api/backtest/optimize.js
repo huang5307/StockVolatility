@@ -20,6 +20,7 @@ export async function onRequest(context) {
         symbol,
         startDate,
         endDate,
+        gridPercent = 3.0,
         orderQuantity = 1,
         initialStock = 0,
         maxStock,
@@ -68,6 +69,7 @@ export async function onRequest(context) {
 
         const baseOpts = {
             symbol,
+            gridPercent: gridPercent !== undefined && gridPercent !== '' ? parseFloat(gridPercent) : 3.0,
             orderQuantity: parseInt(orderQuantity, 10) || 1,
             initialStock: parseInt(initialStock, 10) || 0,
             maxStock: maxStock !== undefined && maxStock !== '' ? parseInt(maxStock, 10) : undefined,
