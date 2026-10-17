@@ -118,7 +118,7 @@
                             <div class="col-md-4">
                                 <div class="card border-info h-100 bg-info-subtle">
                                     <div class="card-body">
-                                        <div class="text-info-emphasis fw-bold small text-uppercase">🛡️ 最穩健配置 (風報比最高)</div>
+                                        <div class="text-info-emphasis fw-bold small text-uppercase">🛡️ 效益甜蜜點 (抗跌風報比最高)</div>
                                         <h4 class="mt-1 mb-1 fw-bold text-info-emphasis" id="rec-best-balanced-title">間距 --%</h4>
                                         <div class="small text-muted" id="rec-best-balanced-desc">載入中...</div>
                                         <button class="btn btn-sm btn-info text-white mt-2 btn-apply-rec" id="btn-apply-best-balanced">套用此條件回測</button>
@@ -151,6 +151,8 @@
                                             <th>套利報酬率 (%)</th>
                                             <th>平倉套利筆數</th>
                                             <th>平均每筆獲利 ($)</th>
+                                            <th>抗跌深度 (資金斷糧)</th>
+                                            <th>網格風報比</th>
                                             <th>最大佔用本金</th>
                                             <th>期末持倉</th>
                                             <th>操作</th>
@@ -218,9 +220,9 @@
                 <!-- 回測核心效益指標看板 -->
                 <div id="backtest-summary-container" style="display: none;" class="mb-4">
                     <div class="row g-3">
-                        <div class="col-6 col-md-3">
+                        <div class="col-6 col-md-2">
                             <div class="metric-card border-start border-4 border-success">
-                                <div class="metric-title text-success fw-bold">💰 網格波動套利純獲利</div>
+                                <div class="metric-title text-success fw-bold">💰 波動套利純獲利</div>
                                 <div class="metric-value text-profit fs-4" id="res-grid-profit">--</div>
                                 <small class="text-muted" id="res-grid-return">套利報酬: --</small>
                             </div>
@@ -246,11 +248,11 @@
                                 <small class="text-muted">實際動用資金峰值</small>
                             </div>
                         </div>
-                        <div class="col-6 col-md-1">
-                            <div class="metric-card">
-                                <div class="metric-title">最大回撤</div>
-                                <div class="metric-value text-muted fs-5" id="res-max-drawdown">--</div>
-                                <small class="text-muted">歷史浮動</small>
+                        <div class="col-6 col-md-2">
+                            <div class="metric-card border-start border-4 border-info">
+                                <div class="metric-title text-info-emphasis fw-bold">🛡️ 抗跌深度 / 斷糧風險</div>
+                                <div class="metric-value text-info-emphasis fs-5" id="res-downside-buffer">--</div>
+                                <small class="text-muted" id="res-missed-buys">斷糧停擺: --</small>
                             </div>
                         </div>
                         <div class="col-6 col-md-2">

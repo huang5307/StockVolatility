@@ -911,15 +911,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const brProfit = Math.round(br.realizedProfit).toLocaleString();
         const brGridRet = (br.gridReturn * 100).toFixed(2);
         const brAvgProfit = Math.round(br.avgProfitPerTrade || (br.closedTrades > 0 ? br.realizedProfit / br.closedTrades : 0)).toLocaleString();
-        recBestReturnDesc.innerHTML = `波動套利純獲利: <strong class="text-success fs-6">+$${brProfit}</strong> (套利報酬 +${brGridRet}%)<br/>平倉套利: <strong>${br.closedTrades} 筆</strong> (平均每筆 +$${brAvgProfit}) | 最大佔用本金: $${Math.round(br.maxCapitalDeployed).toLocaleString()}`;
+        const brDownside = br.downsideBufferPct !== undefined ? `-${br.downsideBufferPct}%` : '--';
+        const brMissed = br.missedBuys > 0 ? `<span class="text-danger fw-bold">斷糧 ${br.missedBuys} 筆</span>` : `<span class="text-success">斷糧 0 筆</span>`;
+        recBestReturnDesc.innerHTML = `波動套利純獲利: <strong class="text-success fs-6">+$${brProfit}</strong> (+${brGridRet}%)<br/>抗跌承接: <strong>${brDownside}</strong> (${brMissed}) | 平倉 <strong>${br.closedTrades} 筆</strong> (每筆 +$${brAvgProfit})`;
 
-        // 2. 最穩健配置
+        // 2. 效益甜蜜點 (抗跌風報比最高)
         const bb = rec.bestBalanced;
         recBestBalancedTitle.innerText = `跳動間距 ${bb.gridPercent}%`;
         const bbProfit = Math.round(bb.realizedProfit).toLocaleString();
         const bbGridRet = (bb.gridReturn * 100).toFixed(2);
         const bbAvgProfit = Math.round(bb.avgProfitPerTrade || (bb.closedTrades > 0 ? bb.realizedProfit / bb.closedTrades : 0)).toLocaleString();
-        recBestBalancedDesc.innerHTML = `波動套利純獲利: <strong class="text-info-emphasis">+$${bbProfit}</strong> (套利報酬 +${bbGridRet}%)<br/>最大回撤僅 <strong>${(bb.maxDrawdown * 100).toFixed(1)}%</strong> | 平倉 ${bb.closedTrades} 筆 (平均每筆 +$${bbAvgProfit})`;
+        const bbDownside = bb.downsideBufferPct !== undefined ? `-${bb.downsideBufferPct}%` : '--';
+        const bbMissed = bb.missedBuys > 0 ? `<span class="text-danger fw-bold">斷糧 ${bb.missedBuys} 筆</span>` : `<span class="text-success fw-bold">零斷糧安全承接</span>`;
+        const bbHealth = bb.gridHealthRatio !== undefined ? bb.gridHealthRatio.toFixed(2) : '--';
+        recBestBalancedDesc.innerHTML = `抗跌承接深度: <strong>${bbDownside}</strong> (${bbMissed})<br/>波動套利純獲利: <strong class="text-info-emphasis">+$${bbProfit}</strong> (+${bbGridRet}%) | 網格風報比: <strong>${bbHealth}</strong>`;
 
         // 3. ATR 建議
         const atrPct = rec.atrRecommendedPercent;
@@ -934,22 +939,30 @@ document.addEventListener('DOMContentLoaded', () => {
         // 渲染參數效益柱狀對比圖
         renderOptimizationChart(data.ranking);
 
-        // 渲染排行表格 (對應 8 欄表頭)
+        // 渲染排行表格 (對應 10 欄表頭)
         optimizeTableBody.innerHTML = '';
         data.ranking.forEach(item => {
             const tr = document.createElement('tr');
             const profitStr = Math.round(item.realizedProfit).toLocaleString();
             const gridRetPct = (item.gridReturn * 100).toFixed(2);
             const avgProfitStr = Math.round(item.avgProfitPerTrade || (item.closedTrades > 0 ? item.realizedProfit / item.closedTrades : 0)).toLocaleString();
+            const downsideStr = item.downsideBufferPct !== undefined ? `-${item.downsideBufferPct}%` : '--';
+            const missedStr = item.missedBuys > 0
+                ? `<span class="badge bg-danger">斷糧 ${item.missedBuys} 筆</span>`
+                : `<span class="badge bg-success-subtle text-success">零斷糧</span>`;
+            const healthRatioStr = item.gridHealthRatio !== undefined ? item.gridHealthRatio.toFixed(2) : '--';
             const isBest = item.gridPercent === br.gridPercent;
-            tr.className = isBest ? 'table-success fw-bold' : '';
+            const isBalanced = item.gridPercent === bb.gridPercent;
+            tr.className = isBest ? 'table-success fw-bold' : (isBalanced ? 'table-info fw-semibold' : '');
 
             tr.innerHTML = `
-                <td>${item.gridPercent}% ${isBest ? '🏆' : ''}</td>
+                <td>${item.gridPercent}% ${isBest ? '🏆' : (isBalanced ? '🛡️' : '')}</td>
                 <td class="text-profit fw-bold">+$${profitStr}</td>
                 <td class="text-success fw-bold">+${gridRetPct}%</td>
                 <td>${item.closedTrades} 筆</td>
                 <td><strong class="text-success">+$${avgProfitStr}</strong></td>
+                <td><strong>${downsideStr}</strong> ${missedStr}</td>
+                <td class="fw-semibold text-primary">${healthRatioStr}</td>
                 <td>$${Math.round(item.maxCapitalDeployed).toLocaleString()}</td>
                 <td>${item.finalStockUnits || 0} ${unit}</td>
                 <td><button class="btn btn-sm ${isBest ? 'btn-success' : 'btn-outline-primary'} py-0 px-2 btn-apply-row" data-percent="${item.gridPercent}">套用</button></td>
@@ -1146,10 +1159,20 @@ document.addEventListener('DOMContentLoaded', () => {
             maxCapEl.innerText = `$${Math.round(sum.maxCapitalDeployed).toLocaleString()}`;
         }
 
-        // 5. 最大回撤
-        const maxDdEl = document.getElementById('res-max-drawdown');
-        if (maxDdEl) {
-            maxDdEl.innerText = `${(sum.maxDrawdown * 100).toFixed(2)}%`;
+        // 5. 抗跌深度與斷糧風險
+        const downsideEl = document.getElementById('res-downside-buffer');
+        if (downsideEl) {
+            const dsVal = sum.downsideBufferPct !== undefined ? `-${sum.downsideBufferPct}%` : '--';
+            downsideEl.innerText = dsVal;
+        }
+        const missedBuysEl = document.getElementById('res-missed-buys');
+        if (missedBuysEl) {
+            if (sum.missedBuys > 0) {
+                missedBuysEl.innerHTML = `<span class="text-danger fw-bold">⚠️ 斷糧停擺: ${sum.missedBuys} 筆 (枯竭率 ${sum.capitalExhaustionRate}%)</span>`;
+            } else {
+                const healthText = sum.gridHealthRatio !== undefined ? ` (風報比: ${sum.gridHealthRatio})` : '';
+                missedBuysEl.innerHTML = `<span class="text-success fw-semibold">零斷糧安全承接</span><span class="text-muted">${healthText}</span>`;
+            }
         }
 
         // 6. 全組合期末總權益
@@ -1160,7 +1183,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const trEl = document.getElementById('res-total-return');
         if (trEl) {
             const trPct = (sum.totalReturn * 100).toFixed(2);
-            trEl.innerHTML = `總資產變化: <strong class="${sum.totalReturn >= 0 ? 'text-profit' : 'text-loss'}">${trPct >= 0 ? '+' : ''}${trPct}%</strong>`;
+            const mddPct = (sum.maxDrawdown * 100).toFixed(1);
+            trEl.innerHTML = `總資產: <strong class="${sum.totalReturn >= 0 ? 'text-profit' : 'text-loss'}">${trPct >= 0 ? '+' : ''}${trPct}%</strong> <small class="text-muted">(回撤 ${mddPct}%)</small>`;
         }
 
         renderBacktestChart(data.equityCurve, data.symbol, data.stockName, data.initialParams?.gridPercent);
@@ -1245,22 +1269,41 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        tradesCountBadge.innerText = `${trades.length} 筆`;
+        const realTradesCount = trades.filter(t => t.type !== 'missed_buy').length;
+        const missedTradesCount = trades.filter(t => t.type === 'missed_buy').length;
+        tradesCountBadge.innerText = missedTradesCount > 0 
+            ? `成交 ${realTradesCount} 筆 / 斷糧停擺 ${missedTradesCount} 筆`
+            : `${realTradesCount} 筆成交`;
+
         trades.forEach(tr => {
             const isBuy = tr.type === 'buy';
+            const isMissed = tr.type === 'missed_buy';
             const trRow = document.createElement('tr');
+            if (isMissed) {
+                trRow.className = 'table-warning';
+            }
+
+            let badgeHtml = '';
+            if (isBuy) {
+                badgeHtml = '<span class="badge bg-danger">買進</span>';
+            } else if (isMissed) {
+                badgeHtml = '<span class="badge bg-warning text-dark">⚠️ 資金不足受阻</span>';
+            } else {
+                badgeHtml = '<span class="badge bg-success">賣出</span>';
+            }
+
             const pnlText = tr.pnl !== undefined
                 ? `<span class="${tr.pnl >= 0 ? 'text-profit' : 'text-loss'} fw-bold">${tr.pnl >= 0 ? '+' : ''}$${tr.pnl.toLocaleString()}</span>`
                 : '-';
 
             trRow.innerHTML = `
                 <td><small>${tr.date}</small></td>
-                <td><span class="badge ${isBuy ? 'bg-danger' : 'bg-success'}">${isBuy ? '買進' : '賣出'}</span></td>
+                <td>${badgeHtml}</td>
                 <td>$${tr.price.toFixed(2)}</td>
                 <td>${tr.units} ${tr.unitName || unit}</td>
-                <td>$${Math.round(tr.amount).toLocaleString()}</td>
+                <td>${isMissed ? '<span class="text-muted">未成交</span>' : '$' + Math.round(tr.amount).toLocaleString()}</td>
                 <td>${pnlText}</td>
-                <td><small class="text-muted">${tr.note || '-'}</small></td>
+                <td><small class="${isMissed ? 'text-danger fw-semibold' : 'text-muted'}">${tr.note || '-'}</small></td>
             `;
             tradesTableBody.appendChild(trRow);
         });

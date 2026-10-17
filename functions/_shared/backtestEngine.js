@@ -118,6 +118,33 @@ export function runBacktest(kline, opts = {}) {
     let closedTrades = 0;
     let tradeId = 1;
 
+    // 理論最大抗跌承接深度 (Downside Buffer)
+    // 從初始價格起，在當前跳動間距與每筆買入成本下，初始現金連續向下逢跌承接所能承受的最大跌幅百分比
+    let simCash = cash;
+    let simPrice = initialPrice;
+    let dropSteps = 0;
+    const stepRatio = gridPercent / 100;
+    const boundLower = Math.max(0.01, lowerPrice);
+
+    while (simPrice * (1 - stepRatio) >= boundLower) {
+        const nextPrice = simPrice * (1 - stepRatio);
+        const cost = sharesPerTrade * nextPrice;
+        if (simCash >= cost) {
+            simCash -= cost;
+            simPrice = nextPrice;
+            dropSteps++;
+        } else {
+            break;
+        }
+    }
+    const downsideBufferPct = initialPrice > 0
+        ? Number((((initialPrice - simPrice) / initialPrice) * 100).toFixed(1))
+        : 0;
+
+    let missedBuys = 0;
+    const missedBuyRecords = [];
+    let executedBuys = 0;
+
     let realizedProfit = 0; // 累計網格波動套利純利潤 ($)
     let currentCapitalDeployed = currentStockUnits * sharesPerTrade > 0 ? currentShares * initialPrice : 0;
     let maxCapitalDeployed = currentCapitalDeployed > 0 ? currentCapitalDeployed : sharesPerTrade * initialPrice;
@@ -154,6 +181,7 @@ export function runBacktest(kline, opts = {}) {
                         cash -= buyCost;
                         currentStockUnits += orderQuantityUnits;
                         currentShares += sharesPerTrade;
+                        executedBuys++;
 
                         openPositions.push({
                             id: tradeId++,
@@ -181,6 +209,27 @@ export function runBacktest(kline, opts = {}) {
                             note: `跌破蛛網線 $${line.toFixed(2)} 買進 ${orderQuantityUnits} ${unitInfo.unitName}`
                         });
                         break; // 當天只觸發一次買進
+                    } else {
+                        // 資金不足，發生資金枯竭受阻 (Missed Buy)
+                        missedBuys++;
+                        missedBuyRecords.push({
+                            date: curDate,
+                            price: line,
+                            requiredCost: Number(buyCost.toFixed(2)),
+                            cashAvailable: Number(cash.toFixed(2))
+                        });
+                        tradeRecords.push({
+                            type: 'missed_buy',
+                            price: line,
+                            units: orderQuantityUnits,
+                            unitName: unitInfo.unitName,
+                            shares: sharesPerTrade,
+                            date: curDate,
+                            amount: Number(buyCost.toFixed(2)),
+                            currentStockUnits,
+                            note: `⚠️ 跌破蛛網線 $${line.toFixed(2)} 觸發買點，但可用現金僅 $${Math.round(cash).toLocaleString()} 不足支付 $${Math.round(buyCost).toLocaleString()}，資金斷糧暫停承接`
+                        });
+                        break;
                     }
                 }
             }
@@ -288,6 +337,13 @@ export function runBacktest(kline, opts = {}) {
     const winRate = closedTrades > 0 ? winTrades / closedTrades : 0;
     const avgProfitPerTrade = closedTrades > 0 ? Number((realizedProfit / closedTrades).toFixed(2)) : 0;
 
+    const totalBuySignals = executedBuys + missedBuys;
+    const capitalExhaustionRate = totalBuySignals > 0 ? Number(((missedBuys / totalBuySignals) * 100).toFixed(1)) : 0;
+    // 網格風報比 (Grid Health Ratio): 套利純收益率 * 抗跌承接深度 / (1 + 斷糧受阻筆數 * 2)
+    const gridHealthRatio = Number((
+        (gridReturn * 100) * (downsideBufferPct / 100) / (1 + missedBuys * 2)
+    ).toFixed(2));
+
     return {
         unitInfo,
         initialParams: {
@@ -309,6 +365,13 @@ export function runBacktest(kline, opts = {}) {
         annualizedGridReturn: Number(annualizedGridReturn.toFixed(4)),
         avgProfitPerTrade,
 
+        // 資金承接風險與抗跌深度指標（防禦資金枯竭斷糧停擺）
+        downsideBufferPct,
+        missedBuys,
+        capitalExhaustionRate,
+        gridHealthRatio,
+        missedBuyRecords,
+
         // 期末持倉與浮動市值指標（未平倉持股）
         unrealizedProfit: Number(unrealizedProfit.toFixed(2)),
         finalStockUnits: currentStockUnits,
@@ -323,7 +386,7 @@ export function runBacktest(kline, opts = {}) {
 
         // 成交統計
         winRate: Number(winRate.toFixed(4)),
-        totalTrades: tradeRecords.length,
+        totalTrades: executedBuys + closedTrades,
         closedTrades,
         winTrades,
         tradeRecords,
@@ -333,12 +396,20 @@ export function runBacktest(kline, opts = {}) {
 
 /**
  * 網格參數智能尋優函數 (Grid Parameter Optimizer)
- * 依據「網格波動套利純收益」尋找賺取最多波動現金的甜蜜點
+ * 依據「網格波動套利純收益」與「資金承接抗跌能力」尋找效益甜蜜點
  */
 export function optimizeGrid(kline, baseOpts = {}) {
     if (!kline || kline.length < 2) {
         throw new Error('K線數據不足，無法進行參數尋優');
     }
+
+    const initialPrice = Number(kline[0].close);
+    const unitInfo = getMarketUnitInfo(baseOpts.symbol);
+    const orderQuantityUnits = Math.max(1, parseInt(baseOpts.orderQuantity || 1, 10));
+    const sharesPerTrade = orderQuantityUnits * unitInfo.multiplier;
+    const uniformInitialCash = baseOpts.initialCash !== undefined && baseOpts.initialCash !== '' && !isNaN(baseOpts.initialCash)
+        ? Number(baseOpts.initialCash)
+        : Math.max(150000, Math.round(sharesPerTrade * initialPrice * 15 * 1.2));
 
     // 常用間距掃描梯度
     const candidatePercents = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0];
@@ -358,7 +429,11 @@ export function optimizeGrid(kline, baseOpts = {}) {
 
     for (const pct of candidatePercents) {
         try {
-            const res = runBacktest(kline, { ...baseOpts, gridPercent: pct });
+            const res = runBacktest(kline, {
+                ...baseOpts,
+                initialCash: uniformInitialCash,
+                gridPercent: pct
+            });
             scanResults.push({
                 gridPercent: pct,
                 realizedProfit: res.realizedProfit,
@@ -374,7 +449,11 @@ export function optimizeGrid(kline, baseOpts = {}) {
                 winRate: res.winRate,
                 totalTrades: res.totalTrades,
                 closedTrades: res.closedTrades,
-                finalEquity: res.finalEquity
+                finalEquity: res.finalEquity,
+                downsideBufferPct: res.downsideBufferPct,
+                missedBuys: res.missedBuys,
+                capitalExhaustionRate: res.capitalExhaustionRate,
+                gridHealthRatio: res.gridHealthRatio
             });
         } catch (err) {
             console.warn(`尋優間距 ${pct}% 失敗:`, err.message);
@@ -388,11 +467,16 @@ export function optimizeGrid(kline, baseOpts = {}) {
     // 1. 最高波動套利收益配置 (賺取最多波動純利潤)
     const bestReturnConfig = [...scanResults].sort((a, b) => b.realizedProfit - a.realizedProfit)[0];
 
-    // 2. 最穩健配置 (套利報酬 / 最大回撤 風報比最高)
+    // 2. 最穩健配置 / 效益甜蜜點 (優先零斷糧、且抗跌風報比最高)
     const bestBalancedConfig = [...scanResults].sort((a, b) => {
-        const scoreA = a.gridReturn / Math.max(0.01, a.maxDrawdown);
-        const scoreB = b.gridReturn / Math.max(0.01, b.maxDrawdown);
-        return scoreB - scoreA;
+        // 優先排除出現資金斷糧停擺的配置
+        if (a.missedBuys === 0 && b.missedBuys > 0) return -1;
+        if (b.missedBuys === 0 && a.missedBuys > 0) return 1;
+        // 若皆零斷糧或皆有斷糧，按網格風報比 (gridHealthRatio) 排序
+        if (b.gridHealthRatio !== a.gridHealthRatio) {
+            return b.gridHealthRatio - a.gridHealthRatio;
+        }
+        return b.realizedProfit - a.realizedProfit;
     })[0];
 
     // 3. ATR 建議

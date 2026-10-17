@@ -44,6 +44,33 @@ const assert = require('assert');
 
     assert.ok(optResult.ranking.length > 0, '尋優應產生各間距效益排行榜');
     assert.ok(optResult.recommendations.bestReturn.gridPercent > 0, '應找出最佳收益間距');
+    assert.strictEqual(typeof optResult.recommendations.bestBalanced.gridHealthRatio, 'number', '最穩健配置應提供網格風報比');
+    assert.strictEqual(typeof optResult.recommendations.bestBalanced.downsideBufferPct, 'number', '最穩健配置應提供抗跌承接深度');
+
+    console.log('--- 測試 3: 資金承接風險與斷糧停擺 (Capital Exhaustion Risk & Missed Buys) ---');
+    // 現金僅足夠買進 1 次，後續下跌觸發時應記錄斷糧受阻
+    const lowCashOpts = {
+        symbol: '2330',
+        gridPercent: 3.0,
+        orderQuantity: 1,
+        initialStock: 0,
+        initialCash: 120000 // 僅夠首筆買進 ~97,000，第二次買進將資金不足
+    };
+    const lowCashKLine = [
+        { date: '2024-01-01', high: 100, low: 100, close: 100 },
+        { date: '2024-01-02', high: 99, low: 95, close: 96 }, // 觸發第1買 (買進成功，剩餘現金約 23,000)
+        { date: '2024-01-03', high: 95, low: 90, close: 91 }  // 觸發第2買 (現金不足，斷糧停擺)
+    ];
+    const lowCashRes = runBacktest(lowCashKLine, lowCashOpts);
+    console.log('低資金斷糧測試結果:', {
+        斷糧筆數: lowCashRes.missedBuys,
+        抗跌深度: `${lowCashRes.downsideBufferPct}%`,
+        資金枯竭率: `${lowCashRes.capitalExhaustionRate}%`
+    });
+
+    assert.ok(lowCashRes.missedBuys >= 1, '現金不足時應正確記錄斷糧停擺筆數');
+    assert.ok(lowCashRes.capitalExhaustionRate > 0, '應計算出資金枯竭率');
+    assert.ok(lowCashRes.tradeRecords.some(r => r.type === 'missed_buy'), '成交流水應包含資金斷糧警告紀錄');
 
     console.log('✅ 所有繁體中文新版蛛網交易回測與尋優單測全部通過！');
 })().catch(err => {
