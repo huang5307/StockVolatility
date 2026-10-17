@@ -922,9 +922,11 @@ document.addEventListener('DOMContentLoaded', () => {
         const bbGridRet = (bb.gridReturn * 100).toFixed(2);
         const bbAvgProfit = Math.round(bb.avgProfitPerTrade || (bb.closedTrades > 0 ? bb.realizedProfit / bb.closedTrades : 0)).toLocaleString();
         const bbDownside = bb.downsideBufferPct !== undefined ? `-${bb.downsideBufferPct}%` : '--';
-        const bbMissed = bb.missedBuys > 0 ? `<span class="text-danger fw-bold">斷糧 ${bb.missedBuys} 筆</span>` : `<span class="text-success fw-bold">零斷糧安全承接</span>`;
+        const bbStarveP = bb.starvationPrice ? `$${bb.starvationPrice}` : '--';
+        const bbMissed = bb.missedBuys > 0 ? `<span class="text-danger fw-bold">歷史斷糧 ${bb.missedBuys} 筆</span>` : `<span class="text-success fw-bold">歷史區間零斷糧</span>`;
+        const bbSafe30 = bb.requiredSafeCash30 ? `$${(bb.requiredSafeCash30 / 10000).toFixed(1)}萬` : '--';
         const bbHealth = bb.gridHealthRatio !== undefined ? bb.gridHealthRatio.toFixed(2) : '--';
-        recBestBalancedDesc.innerHTML = `抗跌承接深度: <strong>${bbDownside}</strong> (${bbMissed})<br/>波動套利純獲利: <strong class="text-info-emphasis">+$${bbProfit}</strong> (+${bbGridRet}%) | 網格風報比: <strong>${bbHealth}</strong>`;
+        recBestBalancedDesc.innerHTML = `可承接 <strong>${bb.maxAffordableTrades || 0} 筆</strong> (跌破 <strong>${bbStarveP}</strong> / ${bbDownside} 斷糧)<br/>${bbMissed} | 30%大跌需備: <strong>${bbSafe30}</strong> (風報比: ${bbHealth})`;
 
         // 3. ATR 建議
         const atrPct = rec.atrRecommendedPercent;
@@ -946,14 +948,18 @@ document.addEventListener('DOMContentLoaded', () => {
             const profitStr = Math.round(item.realizedProfit).toLocaleString();
             const gridRetPct = (item.gridReturn * 100).toFixed(2);
             const avgProfitStr = Math.round(item.avgProfitPerTrade || (item.closedTrades > 0 ? item.realizedProfit / item.closedTrades : 0)).toLocaleString();
-            const downsideStr = item.downsideBufferPct !== undefined ? `-${item.downsideBufferPct}%` : '--';
-            const missedStr = item.missedBuys > 0
-                ? `<span class="badge bg-danger">斷糧 ${item.missedBuys} 筆</span>`
-                : `<span class="badge bg-success-subtle text-success">零斷糧</span>`;
+            const starveStr = item.starvationPrice ? `跌破 $${item.starvationPrice}` : '';
+            const downStr = item.downsideBufferPct !== undefined ? `-${item.downsideBufferPct}%` : '--';
+            const affordableStr = item.maxAffordableTrades !== undefined ? `可買 ${item.maxAffordableTrades} 筆` : '';
+            const safeCashStr = item.requiredSafeCash30 ? `$${(item.requiredSafeCash30 / 10000).toFixed(1)} 萬 (${item.requiredSteps30}筆)` : '--';
             const healthRatioStr = item.gridHealthRatio !== undefined ? item.gridHealthRatio.toFixed(2) : '--';
             const isBest = item.gridPercent === br.gridPercent;
             const isBalanced = item.gridPercent === bb.gridPercent;
             tr.className = isBest ? 'table-success fw-bold' : (isBalanced ? 'table-info fw-semibold' : '');
+
+            const missedBadge = item.missedBuys > 0
+                ? `<span class="badge bg-danger">斷糧 ${item.missedBuys} 筆</span>`
+                : `<span class="badge bg-success-subtle text-success">安全</span>`;
 
             tr.innerHTML = `
                 <td>${item.gridPercent}% ${isBest ? '🏆' : (isBalanced ? '🛡️' : '')}</td>
@@ -961,10 +967,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="text-success fw-bold">+${gridRetPct}%</td>
                 <td>${item.closedTrades} 筆</td>
                 <td><strong class="text-success">+$${avgProfitStr}</strong></td>
-                <td><strong>${downsideStr}</strong> ${missedStr}</td>
+                <td><small class="fw-bold">${affordableStr} (${downStr})</small><br/><small class="text-muted">${starveStr} 斷糧</small> ${missedBadge}</td>
+                <td><strong class="text-primary">${safeCashStr}</strong></td>
                 <td class="fw-semibold text-primary">${healthRatioStr}</td>
                 <td>$${Math.round(item.maxCapitalDeployed).toLocaleString()}</td>
-                <td>${item.finalStockUnits || 0} ${unit}</td>
                 <td><button class="btn btn-sm ${isBest ? 'btn-success' : 'btn-outline-primary'} py-0 px-2 btn-apply-row" data-percent="${item.gridPercent}">套用</button></td>
             `;
             optimizeTableBody.appendChild(tr);
@@ -1163,15 +1169,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const downsideEl = document.getElementById('res-downside-buffer');
         if (downsideEl) {
             const dsVal = sum.downsideBufferPct !== undefined ? `-${sum.downsideBufferPct}%` : '--';
-            downsideEl.innerText = dsVal;
+            const affStr = sum.maxAffordableTrades !== undefined ? ` (限購 ${sum.maxAffordableTrades} 筆)` : '';
+            downsideEl.innerText = `${dsVal}${affStr}`;
         }
         const missedBuysEl = document.getElementById('res-missed-buys');
         if (missedBuysEl) {
             if (sum.missedBuys > 0) {
-                missedBuysEl.innerHTML = `<span class="text-danger fw-bold">⚠️ 斷糧停擺: ${sum.missedBuys} 筆 (枯竭率 ${sum.capitalExhaustionRate}%)</span>`;
+                const starveP = sum.starvationPrice ? `跌破 $${sum.starvationPrice} ` : '';
+                missedBuysEl.innerHTML = `<span class="text-danger fw-bold">⚠️ 實盤已斷糧 ${sum.missedBuys} 筆 (${starveP}見底)</span>`;
             } else {
-                const healthText = sum.gridHealthRatio !== undefined ? ` (風報比: ${sum.gridHealthRatio})` : '';
-                missedBuysEl.innerHTML = `<span class="text-success fw-semibold">零斷糧安全承接</span><span class="text-muted">${healthText}</span>`;
+                const starveText = sum.starvationPrice ? `跌破 $${sum.starvationPrice} 斷糧` : '資金充足';
+                const safe30Text = sum.requiredSafeCash30 ? ` (30%需備 $${(sum.requiredSafeCash30 / 10000).toFixed(0)}萬)` : '';
+                missedBuysEl.innerHTML = `<span class="text-success fw-semibold">${starveText}</span><small class="text-muted">${safe30Text}</small>`;
             }
         }
 

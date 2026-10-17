@@ -71,6 +71,9 @@ const assert = require('assert');
     assert.ok(lowCashRes.missedBuys >= 1, '現金不足時應正確記錄斷糧停擺筆數');
     assert.ok(lowCashRes.capitalExhaustionRate > 0, '應計算出資金枯竭率');
     assert.ok(lowCashRes.tradeRecords.some(r => r.type === 'missed_buy'), '成交流水應包含資金斷糧警告紀錄');
+    assert.strictEqual(typeof lowCashRes.starvationPrice, 'number', '應提供臨界斷糧價格');
+    assert.strictEqual(typeof lowCashRes.maxAffordableTrades, 'number', '應提供最大可承接筆數');
+    assert.strictEqual(typeof lowCashRes.requiredSafeCash30, 'number', '應提供抗跌30%所需安全現金');
 
     console.log('✅ 所有繁體中文新版蛛網交易回測與尋優單測全部通過！');
 })().catch(err => {

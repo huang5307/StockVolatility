@@ -118,8 +118,8 @@ export function runBacktest(kline, opts = {}) {
     let closedTrades = 0;
     let tradeId = 1;
 
-    // 理論最大抗跌承接深度 (Downside Buffer)
-    // 從初始價格起，在當前跳動間距與每筆買入成本下，初始現金連續向下逢跌承接所能承受的最大跌幅百分比
+    // 理論最大抗跌承接深度 (Downside Buffer) 與斷糧臨界點推演
+    // 從初始價格起，在當前跳動間距與每筆買入成本下，初始現金連續向下逢跌承接所能承受的最大跌幅與極限價位
     let simCash = cash;
     let simPrice = initialPrice;
     let dropSteps = 0;
@@ -140,6 +140,20 @@ export function runBacktest(kline, opts = {}) {
     const downsideBufferPct = initialPrice > 0
         ? Number((((initialPrice - simPrice) / initialPrice) * 100).toFixed(1))
         : 0;
+    const maxAffordableTrades = dropSteps;
+    const starvationPrice = Number(simPrice.toFixed(2));
+
+    // 試算：若欲抗擊市場 -30% 股災大跌而不斷糧，此間距至少需要多少必備安全現金？
+    let reqCash30 = 0;
+    let curP = initialPrice;
+    let steps30 = 0;
+    while (curP * (1 - stepRatio) >= initialPrice * 0.70) {
+        curP = curP * (1 - stepRatio);
+        reqCash30 += sharesPerTrade * curP;
+        steps30++;
+    }
+    const requiredSafeCash30 = Math.round(reqCash30);
+    const requiredSteps30 = steps30;
 
     let missedBuys = 0;
     const missedBuyRecords = [];
@@ -366,7 +380,11 @@ export function runBacktest(kline, opts = {}) {
         avgProfitPerTrade,
 
         // 資金承接風險與抗跌深度指標（防禦資金枯竭斷糧停擺）
+        maxAffordableTrades,
+        starvationPrice,
         downsideBufferPct,
+        requiredSafeCash30,
+        requiredSteps30,
         missedBuys,
         capitalExhaustionRate,
         gridHealthRatio,
@@ -450,7 +468,11 @@ export function optimizeGrid(kline, baseOpts = {}) {
                 totalTrades: res.totalTrades,
                 closedTrades: res.closedTrades,
                 finalEquity: res.finalEquity,
+                maxAffordableTrades: res.maxAffordableTrades,
+                starvationPrice: res.starvationPrice,
                 downsideBufferPct: res.downsideBufferPct,
+                requiredSafeCash30: res.requiredSafeCash30,
+                requiredSteps30: res.requiredSteps30,
                 missedBuys: res.missedBuys,
                 capitalExhaustionRate: res.capitalExhaustionRate,
                 gridHealthRatio: res.gridHealthRatio
@@ -486,6 +508,7 @@ export function optimizeGrid(kline, baseOpts = {}) {
 
     return {
         avgDailyVolatilityPct,
+        benchmarkCashUsed: uniformInitialCash,
         recommendations: {
             bestReturn: bestReturnConfig,
             bestBalanced: bestBalancedConfig,
