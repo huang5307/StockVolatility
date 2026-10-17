@@ -26,7 +26,9 @@ export async function onRequest(context) {
         minStock = 0,
         initialCash,
         lowerPrice,
-        upperPrice
+        upperPrice,
+        maxGridLayers = 8,
+        stressDropPct = 20.0
     } = params;
 
     if (!symbol) {
@@ -72,7 +74,9 @@ export async function onRequest(context) {
             minStock: parseInt(minStock, 10) || 0,
             initialCash: initialCash !== undefined && initialCash !== '' ? parseFloat(initialCash) : undefined,
             lowerPrice: lowerPrice !== undefined && lowerPrice !== '' ? parseFloat(lowerPrice) : undefined,
-            upperPrice: upperPrice !== undefined && upperPrice !== '' ? parseFloat(upperPrice) : undefined
+            upperPrice: upperPrice !== undefined && upperPrice !== '' ? parseFloat(upperPrice) : undefined,
+            maxGridLayers: parseInt(maxGridLayers, 10) || 8,
+            stressDropPct: parseFloat(stressDropPct) || 20.0
         };
 
         const optimizationResult = optimizeGrid(filteredKline, baseOpts);

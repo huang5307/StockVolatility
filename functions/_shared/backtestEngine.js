@@ -69,11 +69,14 @@ export function runBacktest(kline, opts = {}) {
         gridLines.push(Number((lowerPrice * (1 + ratio)).toFixed(4)));
     }
 
+    const maxGridLayers = Math.max(1, parseInt(opts.maxGridLayers || opts.maxLayers || 8, 10));
+    const stressDropPct = Math.max(1, parseFloat(opts.stressDropPct || 20.0));
+
     // 庫存風控設定
     const minStockUnits = Math.max(0, parseInt(opts.minStock || 0, 10));
     const maxStockUnits = opts.maxStock !== undefined && opts.maxStock !== '' && !isNaN(opts.maxStock)
         ? Math.max(minStockUnits + orderQuantityUnits, parseInt(opts.maxStock, 10))
-        : Math.max(gridLines.length * orderQuantityUnits, 20);
+        : Math.max(minStockUnits + maxGridLayers * orderQuantityUnits, 20);
 
     const initialStockUnitsInput = opts.initialStock !== undefined && opts.initialStock !== '' && !isNaN(opts.initialStock)
         ? Math.max(0, parseInt(opts.initialStock, 10))
@@ -84,7 +87,7 @@ export function runBacktest(kline, opts = {}) {
     const initialStockUnits = autoBase ? orderQuantityUnits : initialStockUnitsInput;
 
     const initialPrice = Number(kline[0].close);
-    const defaultEstimatedCash = (maxStockUnits - initialStockUnits + 5) * sharesPerTrade * initialPrice * 1.2;
+    const defaultEstimatedCash = (maxGridLayers + 2) * sharesPerTrade * initialPrice * 1.1;
     const initialCash = opts.initialCash !== undefined && opts.initialCash !== '' && !isNaN(opts.initialCash)
         ? Number(opts.initialCash)
         : Math.max(100000, Number(defaultEstimatedCash.toFixed(0)));
@@ -118,42 +121,17 @@ export function runBacktest(kline, opts = {}) {
     let closedTrades = 0;
     let tradeId = 1;
 
-    // 理論最大抗跌承接深度 (Downside Buffer) 與斷糧臨界點推演
-    // 從初始價格起，在當前跳動間距與每筆買入成本下，初始現金連續向下逢跌承接所能承受的最大跌幅與極限價位
-    let simCash = cash;
-    let simPrice = initialPrice;
-    let dropSteps = 0;
-    const stepRatio = gridPercent / 100;
-    const boundLower = Math.max(0.01, lowerPrice);
-
-    while (simPrice * (1 - stepRatio) >= boundLower) {
-        const nextPrice = simPrice * (1 - stepRatio);
-        const cost = sharesPerTrade * nextPrice;
-        if (simCash >= cost) {
-            simCash -= cost;
-            simPrice = nextPrice;
-            dropSteps++;
-        } else {
-            break;
-        }
-    }
-    const downsideBufferPct = initialPrice > 0
-        ? Number((((initialPrice - simPrice) / initialPrice) * 100).toFixed(1))
-        : 0;
-    const maxAffordableTrades = dropSteps;
-    const starvationPrice = Number(simPrice.toFixed(2));
-
-    // 試算：若欲抗擊市場 -30% 股災大跌而不斷糧，此間距至少需要多少必備安全現金？
-    let reqCash30 = 0;
-    let curP = initialPrice;
-    let steps30 = 0;
-    while (curP * (1 - stepRatio) >= initialPrice * 0.70) {
-        curP = curP * (1 - stepRatio);
-        reqCash30 += sharesPerTrade * curP;
-        steps30++;
-    }
-    const requiredSafeCash30 = Math.round(reqCash30);
-    const requiredSteps30 = steps30;
+    // === 實盤風控評估：基於「最大疊層數」與「常規極限跌幅考驗 (預設20%)」===
+    // 1. 在用戶預算 maxGridLayers 層內，實際能承受的最大連續跌幅 (%)
+    const actualAbsorbedDropPct = Number(((1 - Math.pow(1 - ratio, maxGridLayers)) * 100).toFixed(1));
+    // 2. 若要完整防禦 stressDropPct (如 20%) 的常態回檔，所需的買進層數
+    const layersNeededForStress = Math.max(1, Math.ceil(Math.log(1 - stressDropPct / 100) / Math.log(1 - ratio)));
+    // 3. 判定是否危險：所需層數 > 預算層數，或抗跌深度 < 考驗跌幅
+    const isDangerous = layersNeededForStress > maxGridLayers || actualAbsorbedDropPct < stressDropPct;
+    const riskRating = isDangerous ? 'danger' : 'safe';
+    // 4. 預算層數全滿時的極限斷糧價格（跌破此價位手頭現金即用盡，停止承接）
+    const starvationPrice = Number((initialPrice * Math.pow(1 - ratio, maxGridLayers)).toFixed(2));
+    const downsideBufferPct = actualAbsorbedDropPct;
 
     let missedBuys = 0;
     const missedBuyRecords = [];
@@ -379,12 +357,15 @@ export function runBacktest(kline, opts = {}) {
         annualizedGridReturn: Number(annualizedGridReturn.toFixed(4)),
         avgProfitPerTrade,
 
-        // 資金承接風險與抗跌深度指標（防禦資金枯竭斷糧停擺）
-        maxAffordableTrades,
+        // 實盤風控評估：基於「最大疊層數」與「常態極限跌幅考驗 (預設20%)」
+        maxGridLayers,
+        stressDropPct,
+        actualAbsorbedDropPct,
+        layersNeededForStress,
+        isDangerous,
+        riskRating,
         starvationPrice,
-        downsideBufferPct,
-        requiredSafeCash30,
-        requiredSteps30,
+        downsideBufferPct: actualAbsorbedDropPct,
         missedBuys,
         capitalExhaustionRate,
         gridHealthRatio,
@@ -414,12 +395,15 @@ export function runBacktest(kline, opts = {}) {
 
 /**
  * 網格參數智能尋優函數 (Grid Parameter Optimizer)
- * 依據「網格波動套利純收益」與「資金承接抗跌能力」尋找效益甜蜜點
+ * 依據「最大疊層數」與「預防極限跌幅 (預設20%)」篩選安全合格間距，並鎖定最佳效益甜蜜點
  */
 export function optimizeGrid(kline, baseOpts = {}) {
     if (!kline || kline.length < 2) {
         throw new Error('K線數據不足，無法進行參數尋優');
     }
+
+    const maxGridLayers = Math.max(1, parseInt(baseOpts.maxGridLayers || baseOpts.maxLayers || 8, 10));
+    const stressDropPct = Math.max(1, parseFloat(baseOpts.stressDropPct || 20.0));
 
     const initialPrice = Number(kline[0].close);
     const unitInfo = getMarketUnitInfo(baseOpts.symbol);
@@ -427,7 +411,7 @@ export function optimizeGrid(kline, baseOpts = {}) {
     const sharesPerTrade = orderQuantityUnits * unitInfo.multiplier;
     const uniformInitialCash = baseOpts.initialCash !== undefined && baseOpts.initialCash !== '' && !isNaN(baseOpts.initialCash)
         ? Number(baseOpts.initialCash)
-        : Math.max(150000, Math.round(sharesPerTrade * initialPrice * 15 * 1.2));
+        : Math.max(150000, Math.round(sharesPerTrade * initialPrice * (maxGridLayers + 2) * 1.1));
 
     // 常用間距掃描梯度
     const candidatePercents = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0];
@@ -449,6 +433,8 @@ export function optimizeGrid(kline, baseOpts = {}) {
         try {
             const res = runBacktest(kline, {
                 ...baseOpts,
+                maxGridLayers,
+                stressDropPct,
                 initialCash: uniformInitialCash,
                 gridPercent: pct
             });
@@ -468,11 +454,14 @@ export function optimizeGrid(kline, baseOpts = {}) {
                 totalTrades: res.totalTrades,
                 closedTrades: res.closedTrades,
                 finalEquity: res.finalEquity,
-                maxAffordableTrades: res.maxAffordableTrades,
+                maxGridLayers: res.maxGridLayers,
+                stressDropPct: res.stressDropPct,
+                actualAbsorbedDropPct: res.actualAbsorbedDropPct,
+                layersNeededForStress: res.layersNeededForStress,
+                isDangerous: res.isDangerous,
+                riskRating: res.riskRating,
                 starvationPrice: res.starvationPrice,
-                downsideBufferPct: res.downsideBufferPct,
-                requiredSafeCash30: res.requiredSafeCash30,
-                requiredSteps30: res.requiredSteps30,
+                downsideBufferPct: res.actualAbsorbedDropPct,
                 missedBuys: res.missedBuys,
                 capitalExhaustionRate: res.capitalExhaustionRate,
                 gridHealthRatio: res.gridHealthRatio
@@ -486,20 +475,24 @@ export function optimizeGrid(kline, baseOpts = {}) {
         throw new Error('參數尋優未能產生有效結果');
     }
 
-    // 1. 最高波動套利收益配置 (賺取最多波動純利潤)
+    // 1. 最高波動套利收益配置 (無風控過濾，純看賺取最多波動純利潤)
     const bestReturnConfig = [...scanResults].sort((a, b) => b.realizedProfit - a.realizedProfit)[0];
 
-    // 2. 最穩健配置 / 效益甜蜜點 (優先零斷糧、且抗跌風報比最高)
-    const bestBalancedConfig = [...scanResults].sort((a, b) => {
-        // 優先排除出現資金斷糧停擺的配置
-        if (a.missedBuys === 0 && b.missedBuys > 0) return -1;
-        if (b.missedBuys === 0 && a.missedBuys > 0) return 1;
-        // 若皆零斷糧或皆有斷糧，按網格風報比 (gridHealthRatio) 排序
-        if (b.gridHealthRatio !== a.gridHealthRatio) {
-            return b.gridHealthRatio - a.gridHealthRatio;
-        }
-        return b.realizedProfit - a.realizedProfit;
-    })[0];
+    // 2. 最穩健配置 / 效益甜蜜點 (通過常態跌幅考驗、零擊穿、且套利獲利最優)
+    const safeCandidates = scanResults.filter(r => !r.isDangerous && r.missedBuys === 0);
+    let bestBalancedConfig;
+    if (safeCandidates.length > 0) {
+        // 在所有安全合格的間距中，挑選套利純利潤最高的配置
+        bestBalancedConfig = [...safeCandidates].sort((a, b) => b.realizedProfit - a.realizedProfit)[0];
+    } else {
+        // 若用戶設定的層數過低（如僅2~3層）導致所有間距都無法扛住預防跌幅，挑選抗跌深度最深、最不易擊穿的
+        bestBalancedConfig = [...scanResults].sort((a, b) => {
+            if (b.actualAbsorbedDropPct !== a.actualAbsorbedDropPct) {
+                return b.actualAbsorbedDropPct - a.actualAbsorbedDropPct;
+            }
+            return b.realizedProfit - a.realizedProfit;
+        })[0];
+    }
 
     // 3. ATR 建議
     let recommendedAtrPct = candidatePercents.reduce((prev, curr) => 
@@ -508,7 +501,8 @@ export function optimizeGrid(kline, baseOpts = {}) {
 
     return {
         avgDailyVolatilityPct,
-        benchmarkCashUsed: uniformInitialCash,
+        maxGridLayers,
+        stressDropPct,
         recommendations: {
             bestReturn: bestReturnConfig,
             bestBalanced: bestBalancedConfig,

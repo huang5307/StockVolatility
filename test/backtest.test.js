@@ -37,18 +37,73 @@ const assert = require('assert');
     assert.ok(result.finalStockUnits >= opts.minStock, '期末庫存不可低於最小底倉');
 
     console.log('--- 測試 2: 智能參數尋優 (Grid Parameter Optimizer) ---');
-    const optResult = optimizeGrid(sampleKLine, { symbol: '2330', initialStock: 0 });
+    const optResult = optimizeGrid(sampleKLine, { symbol: '2330', initialStock: 0, maxGridLayers: 8, stressDropPct: 20 });
     console.log('最佳報酬配置:', optResult.recommendations.bestReturn);
-    console.log('最穩健配置:', optResult.recommendations.bestBalanced);
+    console.log('最穩健配置 (甜蜜點):', optResult.recommendations.bestBalanced);
     console.log('ATR 平均日波幅 %:', optResult.avgDailyVolatilityPct);
 
     assert.ok(optResult.ranking.length > 0, '尋優應產生各間距效益排行榜');
     assert.ok(optResult.recommendations.bestReturn.gridPercent > 0, '應找出最佳收益間距');
-    assert.strictEqual(typeof optResult.recommendations.bestBalanced.gridHealthRatio, 'number', '最穩健配置應提供網格風報比');
-    assert.strictEqual(typeof optResult.recommendations.bestBalanced.downsideBufferPct, 'number', '最穩健配置應提供抗跌承接深度');
+    assert.strictEqual(optResult.maxGridLayers, 8, '應記錄最大承接層數 (8層)');
+    assert.strictEqual(optResult.stressDropPct, 20, '應記錄預防極限跌幅 (20%)');
+    assert.strictEqual(typeof optResult.recommendations.bestBalanced.actualAbsorbedDropPct, 'number', '甜蜜點配置應提供實際抗跌深度');
+    assert.strictEqual(typeof optResult.recommendations.bestBalanced.layersNeededForStress, 'number', '甜蜜點配置應提供抗跌所需層數');
 
-    console.log('--- 測試 3: 資金承接風險與斷糧停擺 (Capital Exhaustion Risk & Missed Buys) ---');
-    // 現金僅足夠買進 1 次，後續下跌觸發時應記錄斷糧受阻
+    console.log('--- 測試 3: 實盤風控評估 - 疊層預算與 20% 波段跌幅壓力測試 ---');
+    // 1% 間距：在 8 層內僅能抗跌 7.7% < 20%，需 23 層才能抗 20%，判定為危險/易擊穿
+    const res1Pct = runBacktest(sampleKLine, {
+        symbol: '2330',
+        gridPercent: 1.0,
+        maxGridLayers: 8,
+        stressDropPct: 20
+    });
+    console.log('1% 間距風控評估:', {
+        抗跌深度: `${res1Pct.actualAbsorbedDropPct}%`,
+        所需層數: res1Pct.layersNeededForStress,
+        是否易擊穿: res1Pct.isDangerous,
+        評級: res1Pct.riskRating
+    });
+    assert.strictEqual(res1Pct.isDangerous, true, '1% 間距在 8 層內無法防禦 20% 跌幅，應判定為危險/易擊穿');
+    assert.strictEqual(res1Pct.riskRating, 'danger', '風險評級應為 danger');
+    assert.ok(res1Pct.layersNeededForStress > 8, '所需層數應超過 8 層預算');
+
+    // 3% 間距：在 8 層內抗跌 21.6% >= 20%，需 8 層即可抗 20%，判定為安全合格
+    const res3Pct = runBacktest(sampleKLine, {
+        symbol: '2330',
+        gridPercent: 3.0,
+        maxGridLayers: 8,
+        stressDropPct: 20
+    });
+    console.log('3% 間距風控評估:', {
+        抗跌深度: `${res3Pct.actualAbsorbedDropPct}%`,
+        所需層數: res3Pct.layersNeededForStress,
+        是否易擊穿: res3Pct.isDangerous,
+        評級: res3Pct.riskRating
+    });
+    assert.strictEqual(res3Pct.isDangerous, false, '3% 間距在 8 層內可完整防禦 20% 跌幅，應判定為安全合格');
+    assert.strictEqual(res3Pct.riskRating, 'safe', '風險評級應為 safe');
+    assert.ok(res3Pct.layersNeededForStress <= 8, '所需層數應在 8 層預算內');
+
+    // 自訂風控測試：用戶改為 6 層預算，抗 20% 跌幅
+    // 3% 間距需 8 層 > 6 層 -> 判定為危險
+    // 4% 間距需 6 層 <= 6 層 -> 判定為安全
+    const res3Pct_6Layers = runBacktest(sampleKLine, {
+        symbol: '2330',
+        gridPercent: 3.0,
+        maxGridLayers: 6,
+        stressDropPct: 20
+    });
+    assert.strictEqual(res3Pct_6Layers.isDangerous, true, '預算縮小至 6 層時，3% 間距應判定為危險');
+
+    const res4Pct_6Layers = runBacktest(sampleKLine, {
+        symbol: '2330',
+        gridPercent: 4.0,
+        maxGridLayers: 6,
+        stressDropPct: 20
+    });
+    assert.strictEqual(res4Pct_6Layers.isDangerous, false, '預算 6 層時，4% 間距可扛住 20% 跌幅，應判定為安全合格');
+
+    console.log('--- 測試 4: 實盤資金不足斷糧停擺 (Missed Buys) ---');
     const lowCashOpts = {
         symbol: '2330',
         gridPercent: 3.0,
@@ -64,18 +119,17 @@ const assert = require('assert');
     const lowCashRes = runBacktest(lowCashKLine, lowCashOpts);
     console.log('低資金斷糧測試結果:', {
         斷糧筆數: lowCashRes.missedBuys,
-        抗跌深度: `${lowCashRes.downsideBufferPct}%`,
-        資金枯竭率: `${lowCashRes.capitalExhaustionRate}%`
+        抗跌深度: `${lowCashRes.actualAbsorbedDropPct}%`,
+        資金枯竭率: `${lowCashRes.capitalExhaustionRate}%`,
+        斷糧臨界價: lowCashRes.starvationPrice
     });
 
     assert.ok(lowCashRes.missedBuys >= 1, '現金不足時應正確記錄斷糧停擺筆數');
     assert.ok(lowCashRes.capitalExhaustionRate > 0, '應計算出資金枯竭率');
     assert.ok(lowCashRes.tradeRecords.some(r => r.type === 'missed_buy'), '成交流水應包含資金斷糧警告紀錄');
     assert.strictEqual(typeof lowCashRes.starvationPrice, 'number', '應提供臨界斷糧價格');
-    assert.strictEqual(typeof lowCashRes.maxAffordableTrades, 'number', '應提供最大可承接筆數');
-    assert.strictEqual(typeof lowCashRes.requiredSafeCash30, 'number', '應提供抗跌30%所需安全現金');
 
-    console.log('✅ 所有繁體中文新版蛛網交易回測與尋優單測全部通過！');
+    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦」風控模型單測全部通過！');
 })().catch(err => {
     console.error('測試失敗:', err);
     process.exit(1);

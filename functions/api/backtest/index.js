@@ -27,7 +27,9 @@ export async function onRequest(context) {
         minStock = 0,
         initialCash,
         lowerPrice,
-        upperPrice
+        upperPrice,
+        maxGridLayers = 8,
+        stressDropPct = 20.0
     } = params;
 
     if (!symbol) {
@@ -74,7 +76,9 @@ export async function onRequest(context) {
             minStock: parseInt(minStock, 10) || 0,
             initialCash: initialCash !== undefined && initialCash !== '' ? parseFloat(initialCash) : undefined,
             lowerPrice: lowerPrice !== undefined && lowerPrice !== '' ? parseFloat(lowerPrice) : undefined,
-            upperPrice: upperPrice !== undefined && upperPrice !== '' ? parseFloat(upperPrice) : undefined
+            upperPrice: upperPrice !== undefined && upperPrice !== '' ? parseFloat(upperPrice) : undefined,
+            maxGridLayers: parseInt(maxGridLayers, 10) || 8,
+            stressDropPct: parseFloat(stressDropPct) || 20.0
         };
 
         const result = runBacktest(filteredKline, opts);
@@ -139,11 +143,14 @@ export async function onRequest(context) {
                 avgProfitPerTrade: result.avgProfitPerTrade,
                 maxCapitalDeployed: result.maxCapitalDeployed,
                 unrealizedProfit: result.unrealizedProfit,
-                maxAffordableTrades: result.maxAffordableTrades,
+                maxGridLayers: result.maxGridLayers,
+                stressDropPct: result.stressDropPct,
+                actualAbsorbedDropPct: result.actualAbsorbedDropPct,
+                layersNeededForStress: result.layersNeededForStress,
+                isDangerous: result.isDangerous,
+                riskRating: result.riskRating,
                 starvationPrice: result.starvationPrice,
                 downsideBufferPct: result.downsideBufferPct,
-                requiredSafeCash30: result.requiredSafeCash30,
-                requiredSteps30: result.requiredSteps30,
                 missedBuys: result.missedBuys,
                 capitalExhaustionRate: result.capitalExhaustionRate,
                 gridHealthRatio: result.gridHealthRatio,

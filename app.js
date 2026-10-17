@@ -47,6 +47,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const backtestForm = document.getElementById('backtest-form');
     const btGridPercent = document.getElementById('bt-grid-percent');
     const btOrderQuantity = document.getElementById('bt-order-quantity');
+    const btMaxLayers = document.getElementById('bt-max-layers');
+    const btStressDrop = document.getElementById('bt-stress-drop');
     const btInitialStock = document.getElementById('bt-initial-stock');
     const btMaxStock = document.getElementById('bt-max-stock');
     const btMinStock = document.getElementById('bt-min-stock');
@@ -55,6 +57,38 @@ document.addEventListener('DOMContentLoaded', () => {
     const btUpperPrice = document.getElementById('bt-upper-price');
     const btnRunBacktest = document.getElementById('btn-run-backtest');
     const btSpinner = document.getElementById('bt-spinner');
+
+    const thLayersAbsorbed = document.getElementById('th-layers-absorbed');
+    const thStressNeeded = document.getElementById('th-stress-needed');
+
+    // 全域風控參數偏好持久化 (localStorage)
+    const MAX_LAYERS_KEY = 'stock_grid_max_layers';
+    const STRESS_DROP_KEY = 'stock_grid_stress_drop';
+    const savedMaxLayers = localStorage.getItem(MAX_LAYERS_KEY);
+    if (savedMaxLayers && btMaxLayers) btMaxLayers.value = savedMaxLayers;
+    const savedStressDrop = localStorage.getItem(STRESS_DROP_KEY);
+    if (savedStressDrop && btStressDrop) btStressDrop.value = savedStressDrop;
+
+    if (btMaxLayers) {
+        btMaxLayers.addEventListener('change', () => {
+            const val = Math.max(2, Math.min(50, parseInt(btMaxLayers.value || 8, 10)));
+            btMaxLayers.value = val;
+            localStorage.setItem(MAX_LAYERS_KEY, val);
+            if (currentLoadedStock) {
+                triggerAutoOptimization();
+            }
+        });
+    }
+    if (btStressDrop) {
+        btStressDrop.addEventListener('change', () => {
+            const val = Math.max(5, Math.min(90, parseFloat(btStressDrop.value || 20)));
+            btStressDrop.value = val;
+            localStorage.setItem(STRESS_DROP_KEY, val);
+            if (currentLoadedStock) {
+                triggerAutoOptimization();
+            }
+        });
+    }
 
     const labelOrderQuantity = document.getElementById('label-order-quantity');
     const labelInitialStock = document.getElementById('label-initial-stock');
@@ -871,7 +905,9 @@ document.addEventListener('DOMContentLoaded', () => {
             minStock: btMinStock.value || 0,
             initialCash: btInitialCash.value || '',
             lowerPrice: lowerVal,
-            upperPrice: upperVal
+            upperPrice: upperVal,
+            maxGridLayers: btMaxLayers ? parseInt(btMaxLayers.value || 8, 10) : 8,
+            stressDropPct: btStressDrop ? parseFloat(btStressDrop.value || 20) : 20
         };
 
 
@@ -904,6 +940,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const rec = data.recommendations;
         const unit = data.unitInfo?.unitName || (isTaiwanCode(data.symbol) ? '張' : '手');
+        const maxLayers = data.maxGridLayers || (btMaxLayers ? parseInt(btMaxLayers.value || 8, 10) : 8);
+        const stressDrop = data.stressDropPct || (btStressDrop ? parseFloat(btStressDrop.value || 20) : 20);
+
+        // 動態更新表頭層數與跌幅數值
+        if (thLayersAbsorbed) thLayersAbsorbed.innerText = `${maxLayers}層極限抗跌`;
+        if (thStressNeeded) thStressNeeded.innerText = `抗${stressDrop}%所需層數`;
 
         // 1. 最高套利純獲利配置
         const br = rec.bestReturn;
@@ -911,22 +953,23 @@ document.addEventListener('DOMContentLoaded', () => {
         const brProfit = Math.round(br.realizedProfit).toLocaleString();
         const brGridRet = (br.gridReturn * 100).toFixed(2);
         const brAvgProfit = Math.round(br.avgProfitPerTrade || (br.closedTrades > 0 ? br.realizedProfit / br.closedTrades : 0)).toLocaleString();
-        const brDownside = br.downsideBufferPct !== undefined ? `-${br.downsideBufferPct}%` : '--';
-        const brMissed = br.missedBuys > 0 ? `<span class="text-danger fw-bold">斷糧 ${br.missedBuys} 筆</span>` : `<span class="text-success">斷糧 0 筆</span>`;
-        recBestReturnDesc.innerHTML = `波動套利純獲利: <strong class="text-success fs-6">+$${brProfit}</strong> (+${brGridRet}%)<br/>抗跌承接: <strong>${brDownside}</strong> (${brMissed}) | 平倉 <strong>${br.closedTrades} 筆</strong> (每筆 +$${brAvgProfit})`;
+        const brDownside = br.actualAbsorbedDropPct !== undefined ? `-${br.actualAbsorbedDropPct}%` : '--';
+        const brStatus = br.isDangerous 
+            ? `<span class="badge bg-danger-subtle text-danger border border-danger">⚠️ 易擊穿 (需${br.layersNeededForStress}層)</span>` 
+            : `<span class="badge bg-success-subtle text-success border border-success">🛡️ 安全合格</span>`;
+        recBestReturnDesc.innerHTML = `波動套利純獲利: <strong class="text-success fs-6">+$${brProfit}</strong> (+${brGridRet}%)<br/>${maxLayers}層抗跌: <strong>${brDownside}</strong> (${brStatus}) | 平倉 <strong>${br.closedTrades} 筆</strong> (每筆 +$${brAvgProfit})`;
 
-        // 2. 效益甜蜜點 (抗跌風報比最高)
+        // 2. 效益甜蜜點 (通過回檔考驗最優)
         const bb = rec.bestBalanced;
         recBestBalancedTitle.innerText = `跳動間距 ${bb.gridPercent}%`;
         const bbProfit = Math.round(bb.realizedProfit).toLocaleString();
         const bbGridRet = (bb.gridReturn * 100).toFixed(2);
         const bbAvgProfit = Math.round(bb.avgProfitPerTrade || (bb.closedTrades > 0 ? bb.realizedProfit / bb.closedTrades : 0)).toLocaleString();
-        const bbDownside = bb.downsideBufferPct !== undefined ? `-${bb.downsideBufferPct}%` : '--';
         const bbStarveP = bb.starvationPrice ? `$${bb.starvationPrice}` : '--';
-        const bbMissed = bb.missedBuys > 0 ? `<span class="text-danger fw-bold">歷史斷糧 ${bb.missedBuys} 筆</span>` : `<span class="text-success fw-bold">歷史區間零斷糧</span>`;
-        const bbSafe30 = bb.requiredSafeCash30 ? `$${(bb.requiredSafeCash30 / 10000).toFixed(1)}萬` : '--';
-        const bbHealth = bb.gridHealthRatio !== undefined ? bb.gridHealthRatio.toFixed(2) : '--';
-        recBestBalancedDesc.innerHTML = `可承接 <strong>${bb.maxAffordableTrades || 0} 筆</strong> (跌破 <strong>${bbStarveP}</strong> / ${bbDownside} 斷糧)<br/>${bbMissed} | 30%大跌需備: <strong>${bbSafe30}</strong> (風報比: ${bbHealth})`;
+        const bbStatus = bb.isDangerous
+            ? `<span class="badge bg-danger">⚠️ 易擊穿 (需 ${bb.layersNeededForStress} 層)</span>`
+            : `<span class="badge bg-success">🛡️ 安全合格 (${bb.layersNeededForStress}層 ≤ 預算${maxLayers}層)</span>`;
+        recBestBalancedDesc.innerHTML = `${maxLayers}層抗跌: <strong>-${bb.actualAbsorbedDropPct}%</strong> (跌破 <strong>${bbStarveP}</strong> 見底)<br/>防禦常態回檔: ${bbStatus}<br/>套利純獲利: <strong class="text-success">+$${bbProfit}</strong> (+${bbGridRet}%) | 每筆 +$${bbAvgProfit}`;
 
         // 3. ATR 建議
         const atrPct = rec.atrRecommendedPercent;
@@ -948,18 +991,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const profitStr = Math.round(item.realizedProfit).toLocaleString();
             const gridRetPct = (item.gridReturn * 100).toFixed(2);
             const avgProfitStr = Math.round(item.avgProfitPerTrade || (item.closedTrades > 0 ? item.realizedProfit / item.closedTrades : 0)).toLocaleString();
-            const starveStr = item.starvationPrice ? `跌破 $${item.starvationPrice}` : '';
-            const downStr = item.downsideBufferPct !== undefined ? `-${item.downsideBufferPct}%` : '--';
-            const affordableStr = item.maxAffordableTrades !== undefined ? `可買 ${item.maxAffordableTrades} 筆` : '';
-            const safeCashStr = item.requiredSafeCash30 ? `$${(item.requiredSafeCash30 / 10000).toFixed(1)} 萬 (${item.requiredSteps30}筆)` : '--';
-            const healthRatioStr = item.gridHealthRatio !== undefined ? item.gridHealthRatio.toFixed(2) : '--';
             const isBest = item.gridPercent === br.gridPercent;
             const isBalanced = item.gridPercent === bb.gridPercent;
             tr.className = isBest ? 'table-success fw-bold' : (isBalanced ? 'table-info fw-semibold' : '');
 
-            const missedBadge = item.missedBuys > 0
-                ? `<span class="badge bg-danger">斷糧 ${item.missedBuys} 筆</span>`
-                : `<span class="badge bg-success-subtle text-success">安全</span>`;
+            const riskBadge = item.isDangerous
+                ? `<span class="badge bg-danger-subtle text-danger border border-danger">⚠️ 易擊穿</span>`
+                : `<span class="badge bg-success-subtle text-success border border-success">🛡️ 安全合格</span>`;
 
             tr.innerHTML = `
                 <td>${item.gridPercent}% ${isBest ? '🏆' : (isBalanced ? '🛡️' : '')}</td>
@@ -967,9 +1005,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td class="text-success fw-bold">+${gridRetPct}%</td>
                 <td>${item.closedTrades} 筆</td>
                 <td><strong class="text-success">+$${avgProfitStr}</strong></td>
-                <td><small class="fw-bold">${affordableStr} (${downStr})</small><br/><small class="text-muted">${starveStr} 斷糧</small> ${missedBadge}</td>
-                <td><strong class="text-primary">${safeCashStr}</strong></td>
-                <td class="fw-semibold text-primary">${healthRatioStr}</td>
+                <td><span class="fw-bold">-${item.actualAbsorbedDropPct}%</span></td>
+                <td><span class="fw-semibold">${item.layersNeededForStress} 層</span></td>
+                <td>${riskBadge}</td>
                 <td>$${Math.round(item.maxCapitalDeployed).toLocaleString()}</td>
                 <td><button class="btn btn-sm ${isBest ? 'btn-success' : 'btn-outline-primary'} py-0 px-2 btn-apply-row" data-percent="${item.gridPercent}">套用</button></td>
             `;
@@ -1092,7 +1130,9 @@ document.addEventListener('DOMContentLoaded', () => {
             minStock: btMinStock.value || 0,
             initialCash: btInitialCash.value || '',
             lowerPrice: lowerVal,
-            upperPrice: upperVal
+            upperPrice: upperVal,
+            maxGridLayers: btMaxLayers ? parseInt(btMaxLayers.value || 8, 10) : 8,
+            stressDropPct: btStressDrop ? parseFloat(btStressDrop.value || 20) : 20
         };
 
 
@@ -1165,22 +1205,21 @@ document.addEventListener('DOMContentLoaded', () => {
             maxCapEl.innerText = `$${Math.round(sum.maxCapitalDeployed).toLocaleString()}`;
         }
 
-        // 5. 抗跌深度與斷糧風險
+        // 5. 跌幅考驗 / 疊層風控
         const downsideEl = document.getElementById('res-downside-buffer');
+        const maxLayers = sum.maxGridLayers || (btMaxLayers ? btMaxLayers.value : 8);
+        const stressDrop = sum.stressDropPct || (btStressDrop ? btStressDrop.value : 20);
         if (downsideEl) {
-            const dsVal = sum.downsideBufferPct !== undefined ? `-${sum.downsideBufferPct}%` : '--';
-            const affStr = sum.maxAffordableTrades !== undefined ? ` (限購 ${sum.maxAffordableTrades} 筆)` : '';
-            downsideEl.innerText = `${dsVal}${affStr}`;
+            const dsVal = sum.actualAbsorbedDropPct !== undefined ? `-${sum.actualAbsorbedDropPct}%` : (sum.downsideBufferPct !== undefined ? `-${sum.downsideBufferPct}%` : '--');
+            downsideEl.innerText = `${dsVal} (${maxLayers}層承接)`;
         }
         const missedBuysEl = document.getElementById('res-missed-buys');
         if (missedBuysEl) {
-            if (sum.missedBuys > 0) {
-                const starveP = sum.starvationPrice ? `跌破 $${sum.starvationPrice} ` : '';
-                missedBuysEl.innerHTML = `<span class="text-danger fw-bold">⚠️ 實盤已斷糧 ${sum.missedBuys} 筆 (${starveP}見底)</span>`;
+            const layersNeeded = sum.layersNeededForStress !== undefined ? sum.layersNeededForStress : '--';
+            if (sum.isDangerous) {
+                missedBuysEl.innerHTML = `<span class="text-danger fw-bold">⚠️ 易擊穿 (抗${stressDrop}%需${layersNeeded}層 > 預算${maxLayers}層)</span>`;
             } else {
-                const starveText = sum.starvationPrice ? `跌破 $${sum.starvationPrice} 斷糧` : '資金充足';
-                const safe30Text = sum.requiredSafeCash30 ? ` (30%需備 $${(sum.requiredSafeCash30 / 10000).toFixed(0)}萬)` : '';
-                missedBuysEl.innerHTML = `<span class="text-success fw-semibold">${starveText}</span><small class="text-muted">${safe30Text}</small>`;
+                missedBuysEl.innerHTML = `<span class="text-success fw-bold">🛡️ 安全合格 (抗${stressDrop}%需${layersNeeded}層 ≤ 預算${maxLayers}層)</span>`;
             }
         }
 
