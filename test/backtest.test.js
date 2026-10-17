@@ -202,13 +202,16 @@ const assert = require('assert');
 
     const expectedTwBudget = 8 * 15 * 1000 * 11.96; // 1,435,200
     console.log('台股網格最大佔用本金計算驗證:', {
-        計算本金: twRes.maxCapitalDeployed,
-        預期本金: expectedTwBudget,
+        實際佔用本金: twRes.maxCapitalDeployed,
+        動用峰值: twRes.peakGridCashDeployed,
+        理論預算: twRes.gridBudgetCapital,
         套利純利潤: twRes.realizedProfit,
         套利報酬率: `${(twRes.gridReturn * 100).toFixed(2)}%`
     });
-    assert.strictEqual(twRes.maxCapitalDeployed, expectedTwBudget, '台股網格最大佔用本金應為 8 * 15 * 1000 * 11.96 = 1,435,200，絕不可包含原始底倉');
-    assert.strictEqual(twRes.gridReturn, Number((twRes.realizedProfit / expectedTwBudget).toFixed(4)), '套利報酬率分母必須為 8層預備本金 1,435,200');
+    assert.strictEqual(twRes.gridBudgetCapital, expectedTwBudget, '台股網格理論預備預算應為 8 * 15 * 1000 * 11.96 = 1,435,200');
+    assert.strictEqual(twRes.maxCapitalDeployed, twRes.peakGridCashDeployed, '台股最大佔用本金應為真實回測動用資金峰值 (peakGridCashDeployed)，絕非固定理論乘數');
+    assert.ok(twRes.maxCapitalDeployed > 0 && twRes.maxCapitalDeployed <= expectedTwBudget, '實際佔用本金應在合理區間內');
+    assert.strictEqual(twRes.gridReturn, Number((twRes.realizedProfit / twRes.maxCapitalDeployed).toFixed(4)), '套利報酬率分母必須為實際佔用本金峰值');
 
     // 陸股案例 (如 600519): 2手/筆，8層，起始價 100，原始持股 10手 (1手 = 100股)
     const cnKLine = [
@@ -228,15 +231,16 @@ const assert = require('assert');
     console.log('陸股網格最大佔用本金計算驗證:', {
         單位: cnRes.unitInfo.unitName,
         乘數: cnRes.unitInfo.multiplier,
-        計算本金: cnRes.maxCapitalDeployed,
-        預期本金: expectedCnBudget,
+        實際佔用本金: cnRes.maxCapitalDeployed,
+        理論預算: cnRes.gridBudgetCapital,
         套利純利潤: cnRes.realizedProfit,
         套利報酬率: `${(cnRes.gridReturn * 100).toFixed(2)}%`
     });
     assert.strictEqual(cnRes.unitInfo.unitName, '手', '陸股單位應為「手」');
     assert.strictEqual(cnRes.unitInfo.multiplier, 100, '陸股每手乘數應為 100 股');
-    assert.strictEqual(cnRes.maxCapitalDeployed, expectedCnBudget, '陸股網格最大佔用本金應為 8 * 2 * 100 * 100 = 160,000');
-    assert.strictEqual(cnRes.gridReturn, Number((cnRes.realizedProfit / expectedCnBudget).toFixed(4)), '陸股套利報酬率分母必須為 160,000');
+    assert.strictEqual(cnRes.gridBudgetCapital, expectedCnBudget, '陸股網格理論預算應為 8 * 2 * 100 * 100 = 160,000');
+    assert.strictEqual(cnRes.maxCapitalDeployed, cnRes.peakGridCashDeployed, '陸股最大佔用本金應為真實回測動用資金峰值 (peakGridCashDeployed)');
+    assert.strictEqual(cnRes.gridReturn, Number((cnRes.realizedProfit / cnRes.maxCapitalDeployed).toFixed(4)), '陸股套利報酬率分母必須為實際佔用本金');
 
     console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件 + 排除原始庫存本金公式」單測全部通過！');
 })().catch(err => {

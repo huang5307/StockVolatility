@@ -31,12 +31,13 @@ export function runBacktest(kline, opts = {}) {
     const unitInfo = getMarketUnitInfo(symbol);
     const multiplier = unitInfo.multiplier; // 台股1000股, 陸股100股
 
+    const initialPrice = Number(kline[0].close);
     const allPrices = kline.map(p => Number(p.close));
-    const allLows = kline.map(p => Number(p.low || p.close));
-    const allHighs = kline.map(p => Number(p.high || p.close));
+    const allLows = kline.map(p => Number(p.low || p.close)).filter(x => x > 0);
+    const allHighs = kline.map(p => Number(p.high || p.close)).filter(x => x > 0);
 
-    const minHistoryPrice = Math.min(...allLows);
-    const maxHistoryPrice = Math.max(...allHighs);
+    const minHistoryPrice = allLows.length > 0 ? Math.min(...allLows) : initialPrice;
+    const maxHistoryPrice = allHighs.length > 0 ? Math.max(...allHighs) : initialPrice;
 
     const gridPercent = Number(opts.gridPercent || 3.0);
     const orderQuantityUnits = Math.max(1, parseInt(opts.orderQuantity || 1, 10));
@@ -45,7 +46,7 @@ export function runBacktest(kline, opts = {}) {
     // 價格區間設定與防呆校驗
     let lowerPrice = opts.lowerPrice !== undefined && opts.lowerPrice !== '' && !isNaN(opts.lowerPrice)
         ? Math.max(0.01, Number(opts.lowerPrice))
-        : Number((minHistoryPrice * 0.92).toFixed(2));
+        : Math.max(0.01, Number((minHistoryPrice * 0.92).toFixed(2)));
 
     let upperPrice = opts.upperPrice !== undefined && opts.upperPrice !== '' && !isNaN(opts.upperPrice)
         ? Math.max(lowerPrice * 1.05, Number(opts.upperPrice))
@@ -53,7 +54,7 @@ export function runBacktest(kline, opts = {}) {
 
     // 若設定的價格區間完全脫離標的歷史真實波動範圍，自動校正為合規區間
     if (upperPrice <= minHistoryPrice || lowerPrice >= maxHistoryPrice) {
-        lowerPrice = Number((minHistoryPrice * 0.92).toFixed(2));
+        lowerPrice = Math.max(0.01, Number((minHistoryPrice * 0.92).toFixed(2)));
         upperPrice = Number((maxHistoryPrice * 1.08).toFixed(2));
     }
 
@@ -88,7 +89,6 @@ export function runBacktest(kline, opts = {}) {
         ? parseInt(opts.initialStock, 10)
         : 0;
 
-    const initialPrice = Number(kline[0].close);
     const defaultEstimatedCash = (maxGridLayers + 2) * sharesPerTrade * initialPrice * 1.1;
     const initialCash = opts.initialCash !== undefined && opts.initialCash !== '' && !isNaN(opts.initialCash)
         ? Number(opts.initialCash)
@@ -173,6 +173,12 @@ export function runBacktest(kline, opts = {}) {
             // 當日跌破該網格線，且前一日收盤高於該網格線
             if (dayLow <= line && prevClose > line) {
                 if (currentStockUnits + orderQuantityUnits <= maxStockUnits && line >= lowerPrice) {
+                    // 正統蛛網交易排他性：同一檔位未平倉前，不可重複買進
+                    const alreadyOccupied = openPositions.some(p => Math.abs(p.gridLine - line) < 0.0001);
+                    if (alreadyOccupied) {
+                        continue;
+                    }
+
                     const buyCost = sharesPerTrade * line;
                     if (cash >= buyCost) {
                         cash -= buyCost;
@@ -205,7 +211,6 @@ export function runBacktest(kline, opts = {}) {
                             currentStockUnits,
                             note: `跌破蛛網線 $${line.toFixed(2)} 買進 ${orderQuantityUnits} ${unitInfo.unitName}`
                         });
-                        break; // 當天只觸發一次買進
                     } else {
                         // 資金不足，發生資金枯竭受阻 (Missed Buy)
                         missedBuys++;
@@ -239,9 +244,11 @@ export function runBacktest(kline, opts = {}) {
             if (dayHigh >= line && prevClose < line) {
                 if (currentStockUnits - orderQuantityUnits >= minStockUnits && openPositions.length > 0 && line <= upperPrice) {
                     // 正統網格配對：尋找買入價低於當前賣出價 (buyPrice < line) 的持倉單，優先配對買入價最接近且低於本檔的持倉（低買高賣獲利平倉）
+                    // 當日買進部位不可同日平倉（遵循 T+1 及避免日內最高最低點假撮合）
                     let bestIdx = -1;
                     let maxBuyBelow = -1;
                     for (let p = 0; p < openPositions.length; p++) {
+                        if (openPositions[p].date === curDate) continue;
                         if (openPositions[p].buyPrice < line) {
                             if (openPositions[p].buyPrice > maxBuyBelow) {
                                 maxBuyBelow = openPositions[p].buyPrice;
@@ -279,7 +286,6 @@ export function runBacktest(kline, opts = {}) {
                             currentStockUnits,
                             note: `突破蛛網線 $${line.toFixed(2)} 賣出 ${orderQuantityUnits} ${unitInfo.unitName} (低吸高拋配對: $${matchedBuy.buyPrice.toFixed(2)}, 套利 +$${Math.round(pnl).toLocaleString()})`
                         });
-                        break; // 當天只觸發一次賣出
                     }
                 }
             }
@@ -321,10 +327,11 @@ export function runBacktest(kline, opts = {}) {
     const remainingCost = openPositions.reduce((sum, pos) => sum + pos.shares * pos.buyPrice, 0);
     const unrealizedProfit = finalStockValue - remainingCost;
 
-    // 網格波動套利純報酬率 = 累計純套利利潤 / 網格最大預備本金
-    // 分母為：最大承接層數 * 每筆買賣數量 * 單位乘數 * 起始每股股價 (絕不含原始庫存底倉)
-    const safeMaxCapital = Math.max(1000, gridBudgetCapital);
-    const gridReturn = realizedProfit / safeMaxCapital;
+    // 網格最大預備本金 (Grid Budget Capital): 嚴格由「最大承接層數 * 每次買賣數量 * 單位乘數 * 起始每股股價」決定，絕不包含原始持股底倉
+    const safeBudgetCapital = Math.max(1000, gridBudgetCapital);
+    // 實盤回測實際動用資金峰值 (Peak Capital Deployed): 回測中真實累計買入支出扣除平倉釋出後的最大資金佔用額
+    const actualMaxCapital = peakGridCashDeployed > 0 ? peakGridCashDeployed : safeBudgetCapital;
+    const gridReturn = actualMaxCapital > 0 ? (realizedProfit / actualMaxCapital) : 0;
 
     // 總資產淨值報酬率 = (期末總資產 - 期初總資產) / 期初總資產
     const totalReturn = (finalEquity - totalInitialEquity) / totalInitialEquity;
@@ -358,8 +365,8 @@ export function runBacktest(kline, opts = {}) {
         },
         // 核心網格套利純收益指標（專注波動盈利）
         realizedProfit: Number(realizedProfit.toFixed(2)),
-        maxCapitalDeployed: Number(safeMaxCapital.toFixed(2)),
-        gridBudgetCapital: Number(safeMaxCapital.toFixed(2)),
+        maxCapitalDeployed: Number(actualMaxCapital.toFixed(2)),
+        gridBudgetCapital: Number(safeBudgetCapital.toFixed(2)),
         peakGridCashDeployed: Number(peakGridCashDeployed.toFixed(2)),
         gridReturn: Number(gridReturn.toFixed(4)),
         annualizedGridReturn: Number(annualizedGridReturn.toFixed(4)),

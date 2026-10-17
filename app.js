@@ -1330,10 +1330,10 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const maxCapSubEl = document.getElementById('res-max-capital-sub');
         if (maxCapSubEl) {
-            const peakStr = sum.peakGridCashDeployed !== undefined
-                ? `$${Math.round(sum.peakGridCashDeployed).toLocaleString()}`
+            const budgetStr = sum.gridBudgetCapital !== undefined
+                ? `$${Math.round(sum.gridBudgetCapital).toLocaleString()}`
                 : '--';
-            maxCapSubEl.innerText = `實際動用峰值: ${peakStr}`;
+            maxCapSubEl.innerText = `理論預算上限: ${budgetStr}`;
         }
 
         // 5. 跌幅考驗 / 疊層風控
