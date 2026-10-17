@@ -850,8 +850,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 切換不同股票時，清空殘留的舊價格區間，避免舊標的價格範圍阻擋新標的交易
         if (!currentLoadedStock || currentLoadedStock.code !== code) {
-            btLowerPrice.value = '';
-            btUpperPrice.value = '';
+            if (btLowerPrice) btLowerPrice.value = '';
+            if (btUpperPrice) btUpperPrice.value = '';
         }
 
         currentLoadedStock = {
@@ -865,13 +865,13 @@ document.addEventListener('DOMContentLoaded', () => {
             endDate: data[data.length - 1].date
         };
 
-        btLowerPrice.placeholder = `最低: $${minPrice.toFixed(2)}`;
-        btUpperPrice.placeholder = `最高: $${maxPrice.toFixed(2)}`;
+        if (btLowerPrice) btLowerPrice.placeholder = `最低: $${minPrice.toFixed(2)}`;
+        if (btUpperPrice) btUpperPrice.placeholder = `最高: $${maxPrice.toFixed(2)}`;
 
         // 預設充足現金估算 (例如 10 張股票預備資金)
         const unitMultiplier = isTaiwanCode(code) ? 1000 : 100;
         const estimatedCash = Math.round(lastClose * unitMultiplier * 10 * 1.2);
-        btInitialCash.placeholder = `預設建議: $${estimatedCash.toLocaleString()}`;
+        if (btInitialCash) btInitialCash.placeholder = `預設建議: $${estimatedCash.toLocaleString()}`;
 
         updateUnitLabels(code);
     };
@@ -886,8 +886,8 @@ document.addEventListener('DOMContentLoaded', () => {
         optSpinner.style.display = 'inline-block';
         optimizeHintText.innerText = `正在為 ${stockCode} 執行全區間間距尋優掃描（1% ~ 10%）...`;
 
-        let lowerVal = btLowerPrice.value ? parseFloat(btLowerPrice.value) : '';
-        let upperVal = btUpperPrice.value ? parseFloat(btUpperPrice.value) : '';
+        let lowerVal = btLowerPrice && btLowerPrice.value ? parseFloat(btLowerPrice.value) : '';
+        let upperVal = btUpperPrice && btUpperPrice.value ? parseFloat(btUpperPrice.value) : '';
         if (currentLoadedStock) {
             if (upperVal && upperVal <= currentLoadedStock.minPrice) upperVal = '';
             if (lowerVal && lowerVal >= currentLoadedStock.maxPrice) lowerVal = '';
@@ -897,13 +897,13 @@ document.addEventListener('DOMContentLoaded', () => {
             symbol: stockCode,
             stockName: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.name : undefined,
             kline: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.kline : undefined,
-            startDate: startDateInput.value || '',
-            endDate: endDateInput.value || '',
-            orderQuantity: btOrderQuantity.value || 1,
-            initialStock: btInitialStock.value || 0,
-            maxStock: btMaxStock.value || '',
-            minStock: btMinStock.value || 0,
-            initialCash: btInitialCash.value || '',
+            startDate: startDateInput ? startDateInput.value : '',
+            endDate: endDateInput ? endDateInput.value : '',
+            orderQuantity: btOrderQuantity ? btOrderQuantity.value : 1,
+            initialStock: btInitialStock ? btInitialStock.value : 0,
+            maxStock: btMaxStock ? btMaxStock.value : '',
+            minStock: btMinStock ? btMinStock.value : 0,
+            initialCash: btInitialCash ? btInitialCash.value : '',
             lowerPrice: lowerVal,
             upperPrice: upperVal,
             maxGridLayers: btMaxLayers ? parseInt(btMaxLayers.value || 8, 10) : 8,
@@ -1110,8 +1110,8 @@ document.addEventListener('DOMContentLoaded', () => {
         btSpinner.style.display = 'inline-block';
         backtestChart.showLoading();
 
-        let lowerVal = btLowerPrice.value ? parseFloat(btLowerPrice.value) : '';
-        let upperVal = btUpperPrice.value ? parseFloat(btUpperPrice.value) : '';
+        let lowerVal = btLowerPrice && btLowerPrice.value ? parseFloat(btLowerPrice.value) : '';
+        let upperVal = btUpperPrice && btUpperPrice.value ? parseFloat(btUpperPrice.value) : '';
         if (currentLoadedStock) {
             if (upperVal && upperVal <= currentLoadedStock.minPrice) upperVal = '';
             if (lowerVal && lowerVal >= currentLoadedStock.maxPrice) lowerVal = '';
@@ -1121,14 +1121,14 @@ document.addEventListener('DOMContentLoaded', () => {
             symbol: stockCode,
             stockName: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.name : undefined,
             kline: (currentLoadedStock && currentLoadedStock.code === stockCode) ? currentLoadedStock.kline : undefined,
-            startDate: startDateInput.value || '',
-            endDate: endDateInput.value || '',
-            gridPercent: btGridPercent.value,
-            orderQuantity: btOrderQuantity.value || 1,
-            initialStock: btInitialStock.value || 0,
-            maxStock: btMaxStock.value || '',
-            minStock: btMinStock.value || 0,
-            initialCash: btInitialCash.value || '',
+            startDate: startDateInput ? startDateInput.value : '',
+            endDate: endDateInput ? endDateInput.value : '',
+            gridPercent: btGridPercent ? btGridPercent.value : 3.0,
+            orderQuantity: btOrderQuantity ? btOrderQuantity.value : 1,
+            initialStock: btInitialStock ? btInitialStock.value : 0,
+            maxStock: btMaxStock ? btMaxStock.value : '',
+            minStock: btMinStock ? btMinStock.value : 0,
+            initialCash: btInitialCash ? btInitialCash.value : '',
             lowerPrice: lowerVal,
             upperPrice: upperVal,
             maxGridLayers: btMaxLayers ? parseInt(btMaxLayers.value || 8, 10) : 8,
