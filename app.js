@@ -524,6 +524,9 @@ document.addEventListener('DOMContentLoaded', () => {
             // 自動觸發一次快速參數尋優，讓使用者一目了然最佳間距
             triggerAutoOptimization();
 
+            // 自動以當前條件執行精準回測，讓成交流水明細與權益圖表立即呈現
+            handleBacktest(new Event('submit'));
+
         } catch (err) {
             showStatus(`查詢失敗: ${err.message}`, 'danger');
             [amplitudeChart, klineChart].forEach(c => c.clear());
@@ -1268,6 +1271,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (!res.ok) throw new Error(data.error || '回測失敗');
 
             renderBacktestResults(data);
+            saveLocalHistoryRecord(data);
             loadBacktestHistory();
             const profitStr = Math.round(data.summary.realizedProfit).toLocaleString();
             const avgP = Math.round(data.summary.avgProfitPerTrade || (data.summary.closedTrades > 0 ? data.summary.realizedProfit / data.summary.closedTrades : 0)).toLocaleString();
@@ -1488,16 +1492,51 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     };
 
+    const saveLocalHistoryRecord = (data) => {
+        try {
+            const list = JSON.parse(localStorage.getItem('stock_bt_history') || '[]');
+            const record = {
+                id: 'local_' + Date.now(),
+                symbol: data.symbol,
+                stock_name: data.stockName,
+                grid_percent: data.initialParams?.gridPercent,
+                total_return: data.summary?.totalReturn,
+                max_drawdown: data.summary?.maxDrawdown,
+                created_at: new Date().toISOString(),
+                payload: data
+            };
+            list.unshift(record);
+            if (list.length > 20) list.pop();
+            localStorage.setItem('stock_bt_history', JSON.stringify(list));
+        } catch (_) {}
+    };
+
+    const getLocalHistoryRecords = () => {
+        try {
+            return JSON.parse(localStorage.getItem('stock_bt_history') || '[]');
+        } catch (_) {
+            return [];
+        }
+    };
+
     const loadBacktestHistory = async () => {
         try {
-            const res = await fetch('/api/backtest/history?limit=15');
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error);
+            let records = [];
+            try {
+                const res = await fetch('/api/backtest/history?limit=15');
+                const data = await res.json();
+                if (res.ok && Array.isArray(data.records) && data.records.length > 0) {
+                    records = data.records;
+                }
+            } catch (_) {}
+
+            if (records.length === 0) {
+                records = getLocalHistoryRecords();
+            }
 
             historyTableBody.innerHTML = '';
-            const records = data.records || [];
             if (records.length === 0) {
-                historyTableBody.innerHTML = `<tr><td colspan="4" class="text-center text-muted py-4">暫無歷史存檔（回測後自動寫入 D1 資料庫）</td></tr>`;
+                historyTableBody.innerHTML = `<tr><td colspan="4" class="text-center text-muted py-4">暫無歷史存檔（回測後自動寫入存檔）</td></tr>`;
                 return;
             }
 
@@ -1505,8 +1544,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const trRow = document.createElement('tr');
                 const retPct = (rec.total_return * 100).toFixed(1);
                 const retClass = rec.total_return >= 0 ? 'text-profit' : 'text-loss';
+                const isLocal = String(rec.id).startsWith('local_');
                 trRow.innerHTML = `
-                    <td><strong>${rec.symbol}</strong><br><small class="text-muted">${rec.stock_name || ''}</small></td>
+                    <td>
+                        <strong>${rec.symbol}</strong> ${isLocal ? '<span class="badge bg-secondary-subtle text-secondary" style="font-size:0.65rem;">本機</span>' : ''}<br>
+                        <small class="text-muted">${rec.stock_name || ''}</small>
+                    </td>
                     <td>
                         <small>間距 ${rec.grid_percent}%</small><br>
                         <span class="${retClass} fw-bold">${retPct >= 0 ? '+' : ''}${retPct}%</span>
@@ -1529,6 +1572,17 @@ document.addEventListener('DOMContentLoaded', () => {
     const loadBacktestDetail = async (id) => {
         try {
             showStatus(`正在載入歷史回測存檔 #${id}...`, 'info');
+            if (String(id).startsWith('local_')) {
+                const list = getLocalHistoryRecords();
+                const found = list.find(r => r.id === id);
+                if (found && found.payload) {
+                    renderBacktestResults(found.payload);
+                    showStatus(`已從本機載入回測存檔 ${found.symbol} (${found.grid_percent}%)`, 'success');
+                    backtestSummaryContainer.scrollIntoView({ behavior: 'smooth' });
+                    return;
+                }
+            }
+
             const res = await fetch(`/api/backtest/history?id=${id}`);
             const rec = await res.json();
             if (!res.ok) throw new Error(rec.error);
