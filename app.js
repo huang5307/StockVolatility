@@ -1479,12 +1479,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? `<span class="${tr.pnl >= 0 ? 'text-profit' : 'text-loss'} fw-bold">${tr.pnl >= 0 ? '+' : ''}$${tr.pnl.toLocaleString()}</span>`
                 : '-';
 
+            let costHtml = '<span class="text-muted">未成交</span>';
+            if (!isMissed) {
+                const cumCost = tr.cumulativeCost !== undefined ? tr.cumulativeCost : tr.amount;
+                const changeStr = isBuy
+                    ? `<small class="text-danger fw-semibold">(+${Math.round(tr.amount).toLocaleString()})</small>`
+                    : `<small class="text-success fw-semibold">(-${Math.round(tr.costReleased !== undefined ? tr.costReleased : tr.amount).toLocaleString()})</small>`;
+                costHtml = `<strong>$${Math.round(cumCost).toLocaleString()}</strong><br/>${changeStr}`;
+            }
+
             trRow.innerHTML = `
                 <td><small>${tr.date}</small></td>
                 <td>${badgeHtml}</td>
                 <td>$${tr.price.toFixed(2)}</td>
                 <td>${tr.units} ${tr.unitName || unit}</td>
-                <td>${isMissed ? '<span class="text-muted">未成交</span>' : '$' + Math.round(tr.amount).toLocaleString()}</td>
+                <td>${costHtml}</td>
                 <td>${pnlText}</td>
                 <td><small class="${isMissed ? 'text-danger fw-semibold' : 'text-muted'}">${tr.note || '-'}</small></td>
             `;

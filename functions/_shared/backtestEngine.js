@@ -58,16 +58,31 @@ export function runBacktest(kline, opts = {}) {
         upperPrice = Number((maxHistoryPrice * 1.08).toFixed(2));
     }
 
-    // 生成等比蛛網網格線 (Geometric Grid Lines)
+    // 生成蛛網網格線：向下 * (1 - ratio)，向上 * (1 + ratio)，以起始基準價為錨點
     const ratio = gridPercent / 100;
-    const gridLines = [];
-    let curLinePrice = lowerPrice;
-    while (curLinePrice <= upperPrice * 1.02) {
-        gridLines.push(Number(curLinePrice.toFixed(4)));
-        curLinePrice = curLinePrice * (1 + ratio);
+    const basePrice = (opts.basePrice !== undefined && opts.basePrice !== '' && !isNaN(opts.basePrice) && Number(opts.basePrice) > 0)
+        ? Number(opts.basePrice)
+        : initialPrice;
+
+    const downLines = [];
+    let curDown = basePrice;
+    while (curDown * (1 - ratio) >= lowerPrice * 0.98) {
+        curDown = Number((curDown * (1 - ratio)).toFixed(4));
+        downLines.push(curDown);
     }
+
+    const upLines = [];
+    let curUp = basePrice;
+    while (curUp * (1 + ratio) <= upperPrice * 1.02) {
+        curUp = Number((curUp * (1 + ratio)).toFixed(4));
+        upLines.push(curUp);
+    }
+    upLines.reverse(); // 由高至低排列
+
+    const gridLines = [...upLines, Number(basePrice.toFixed(4)), ...downLines];
+    gridLines.sort((a, b) => b - a); // 降序排列 (高至低)
     if (gridLines.length < 2) {
-        gridLines.push(Number((lowerPrice * (1 + ratio)).toFixed(4)));
+        gridLines.push(Number((basePrice * (1 - ratio)).toFixed(4)));
     }
 
     const maxGridLayers = Math.max(1, parseInt(opts.maxGridLayers || opts.maxLayers || 8, 10));
@@ -111,6 +126,8 @@ export function runBacktest(kline, opts = {}) {
             buyPrice: initialPrice,
             shares: currentShares,
             units: currentStockUnits,
+            gridLine: initialPrice,
+            targetSellPrice: Number((initialPrice * (1 + ratio)).toFixed(4)),
             note: '原始庫存底倉'
         });
     }
@@ -168,7 +185,7 @@ export function runBacktest(kline, opts = {}) {
         const curDate = item.date;
 
         // --- 1. 逢跌觸網買入判斷 (Low 跌破某一網格線) ---
-        for (let g = gridLines.length - 1; g >= 0; g--) {
+        for (let g = 0; g < gridLines.length; g++) {
             const line = gridLines[g];
             // 當日跌破該網格線，且前一日收盤高於該網格線
             if (dayLow <= line && prevClose > line) {
@@ -180,6 +197,7 @@ export function runBacktest(kline, opts = {}) {
                     }
 
                     const buyCost = sharesPerTrade * line;
+                    const targetSellPrice = Number((line * (1 + ratio)).toFixed(4));
                     if (cash >= buyCost) {
                         cash -= buyCost;
                         currentStockUnits += orderQuantityUnits;
@@ -192,7 +210,8 @@ export function runBacktest(kline, opts = {}) {
                             buyPrice: line,
                             shares: sharesPerTrade,
                             units: orderQuantityUnits,
-                            gridLine: line
+                            gridLine: line,
+                            targetSellPrice: targetSellPrice
                         });
 
                         currentGridCashDeployed += buyCost;
@@ -208,8 +227,10 @@ export function runBacktest(kline, opts = {}) {
                             shares: sharesPerTrade,
                             date: curDate,
                             amount: Number(buyCost.toFixed(2)),
+                            cumulativeCost: Number(currentGridCashDeployed.toFixed(2)),
                             currentStockUnits,
-                            note: `跌破蛛網線 $${line.toFixed(2)} 買進 ${orderQuantityUnits} ${unitInfo.unitName}`
+                            targetSellPrice,
+                            note: `跌破蛛網線 $${line.toFixed(2)} 買進 ${orderQuantityUnits} ${unitInfo.unitName} (目標止盈價 $${targetSellPrice.toFixed(2)})`
                         });
                     } else {
                         // 資金不足，發生資金枯竭受阻 (Missed Buy)
@@ -228,6 +249,7 @@ export function runBacktest(kline, opts = {}) {
                             shares: sharesPerTrade,
                             date: curDate,
                             amount: Number(buyCost.toFixed(2)),
+                            cumulativeCost: Number(currentGridCashDeployed.toFixed(2)),
                             currentStockUnits,
                             note: `⚠️ 跌破蛛網線 $${line.toFixed(2)} 觸發買點，但可用現金僅 $${Math.round(cash).toLocaleString()} 不足支付 $${Math.round(buyCost).toLocaleString()}，資金斷糧暫停承接`
                         });
@@ -237,57 +259,48 @@ export function runBacktest(kline, opts = {}) {
             }
         }
 
-        // --- 2. 逢漲觸網賣出判斷 (High 漲破某一網格線 - 專屬配對撮合) ---
-        for (let g = 0; g < gridLines.length; g++) {
-            const line = gridLines[g];
-            // 當日向上穿過該網格線，且前一日收盤低於該網格線
-            if (dayHigh >= line && prevClose < line) {
-                if (currentStockUnits - orderQuantityUnits >= minStockUnits && openPositions.length > 0 && line <= upperPrice) {
-                    // 正統網格配對：尋找買入價低於當前賣出價 (buyPrice < line) 的持倉單，優先配對買入價最接近且低於本檔的持倉（低買高賣獲利平倉）
-                    // 當日買進部位不可同日平倉（遵循 T+1 及避免日內最高最低點假撮合）
-                    let bestIdx = -1;
-                    let maxBuyBelow = -1;
-                    for (let p = 0; p < openPositions.length; p++) {
-                        if (openPositions[p].date === curDate) continue;
-                        if (openPositions[p].buyPrice < line) {
-                            if (openPositions[p].buyPrice > maxBuyBelow) {
-                                maxBuyBelow = openPositions[p].buyPrice;
-                                bestIdx = p;
-                            }
-                        }
-                    }
+        // --- 2. 逢漲觸網賣出判斷 (High 達標目標止盈價 targetSellPrice: buyPrice * (1 + ratio)) ---
+        for (let p = openPositions.length - 1; p >= 0; p--) {
+            const pos = openPositions[p];
+            if (pos.date === curDate) continue; // 當日買進部位不可同日平倉（遵循 T+1 及避免日內最高最低點假撮合）
+            if (currentStockUnits - orderQuantityUnits < minStockUnits) continue;
 
-                    if (bestIdx !== -1) {
-                        const matchedBuy = openPositions.splice(bestIdx, 1)[0];
-                        const sellShares = Math.min(currentShares, sharesPerTrade);
-                        const revenue = sellShares * line;
+            const targetSell = pos.targetSellPrice || Number((pos.buyPrice * (1 + ratio)).toFixed(4));
+            if (targetSell > upperPrice) continue;
 
-                        cash += revenue;
-                        currentStockUnits -= orderQuantityUnits;
-                        currentShares -= sellShares;
-                        currentGridCashDeployed = Math.max(0, currentGridCashDeployed - sellShares * matchedBuy.buyPrice);
-                        closedTrades++;
+            if (dayHigh >= targetSell) {
+                const sellPrice = targetSell;
+                const sellShares = Math.min(currentShares, pos.shares);
+                const revenue = sellShares * sellPrice;
+                const costReleased = sellShares * pos.buyPrice;
+                const pnl = (sellPrice - pos.buyPrice) * sellShares;
 
-                        const pnl = (line - matchedBuy.buyPrice) * sellShares;
-                        realizedProfit += pnl;
-                        if (pnl > 0) winTrades++;
+                cash += revenue;
+                currentStockUnits -= orderQuantityUnits;
+                currentShares -= sellShares;
+                currentGridCashDeployed = Math.max(0, currentGridCashDeployed - costReleased);
+                closedTrades++;
+                realizedProfit += pnl;
+                if (pnl > 0) winTrades++;
 
-                        tradeRecords.push({
-                            type: 'sell',
-                            price: line,
-                            units: orderQuantityUnits,
-                            unitName: unitInfo.unitName,
-                            shares: sellShares,
-                            date: curDate,
-                            amount: Number(revenue.toFixed(2)),
-                            pnl: Number(pnl.toFixed(2)),
-                            buyPrice: matchedBuy.buyPrice,
-                            buyDate: matchedBuy.date,
-                            currentStockUnits,
-                            note: `突破蛛網線 $${line.toFixed(2)} 賣出 ${orderQuantityUnits} ${unitInfo.unitName} (低吸高拋配對: $${matchedBuy.buyPrice.toFixed(2)}, 套利 +$${Math.round(pnl).toLocaleString()})`
-                        });
-                    }
-                }
+                openPositions.splice(p, 1);
+
+                tradeRecords.push({
+                    type: 'sell',
+                    price: sellPrice,
+                    units: orderQuantityUnits,
+                    unitName: unitInfo.unitName,
+                    shares: sellShares,
+                    date: curDate,
+                    amount: Number(revenue.toFixed(2)),
+                    costReleased: Number(costReleased.toFixed(2)),
+                    cumulativeCost: Number(currentGridCashDeployed.toFixed(2)),
+                    pnl: Number(pnl.toFixed(2)),
+                    buyPrice: pos.buyPrice,
+                    buyDate: pos.date,
+                    currentStockUnits,
+                    note: `漲超目標價 $${sellPrice.toFixed(2)} (+${(ratio * 100).toFixed(0)}%) 賣出 ${orderQuantityUnits} ${unitInfo.unitName} (低吸高拋平倉配對: $${pos.buyPrice.toFixed(2)}, 套利 +$${Math.round(pnl).toLocaleString()})`
+                });
             }
         }
 
