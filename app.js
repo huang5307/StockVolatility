@@ -410,6 +410,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const handleQuery = async (event) => {
         event.preventDefault();
+        if (!db) {
+            try {
+                await initDB();
+            } catch (_) {}
+        }
         amplitudeChart.showLoading();
         klineChart.showLoading();
         weeklyAmplitudeChart.showLoading();
@@ -1209,6 +1214,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const pct = parseFloat(params.name);
                 applyGridPercentAndRun(pct);
             }
+        });
     };
 
     // 執行自訂條件單回測
@@ -1602,10 +1608,13 @@ document.addEventListener('DOMContentLoaded', () => {
         btnRefreshHistory.addEventListener('click', loadBacktestHistory);
     }
 
+    if (queryForm) {
+        queryForm.addEventListener('submit', handleQuery);
+    }
+
     initDB().then(() => {
         loadSearchHistory();
         loadBacktestHistory();
-        queryForm.addEventListener('submit', handleQuery);
         showStatus("系統已就緒。請輸入股票代號（例如台股 2330、0050 或陸股 600519）查詢行情。", "success");
     }).catch(err => {
         showStatus(`初始化失敗: ${err}`, 'danger');
