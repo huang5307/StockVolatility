@@ -58,11 +58,19 @@ export function runBacktest(kline, opts = {}) {
         upperPrice = Number((maxHistoryPrice * 1.08).toFixed(2));
     }
 
-    // 生成蛛網網格線：向下 * (1 - ratio)，向上 * (1 + ratio)，嚴格以回測首日收盤價 (initialPrice) 為基準錨點
+    // 生成蛛網網格線：向下 * (1 - ratio)，向上 * (1 + ratio)
     const ratio = gridPercent / 100;
-    const basePrice = (opts.basePrice !== undefined && opts.basePrice !== '' && !isNaN(opts.basePrice) && Number(opts.basePrice) > 0)
-        ? Number(opts.basePrice)
-        : initialPrice;
+    let basePrice = initialPrice;
+    if (opts.basePrice !== undefined && opts.basePrice !== '' && !isNaN(opts.basePrice) && Number(opts.basePrice) > 0) {
+        basePrice = Number(opts.basePrice);
+    } else if (lowerPrice > 0 && lowerPrice < initialPrice) {
+        // 若設定了區間下限 lowerPrice 且低於 initialPrice，則以 lowerPrice 為基底對齊至最接近且不超過 initialPrice 之網格檔位
+        // 例如 lowerPrice = 28, initialPrice = 33.35, ratio = 0.04 -> k = floor(ln(33.35 / 28) / ln(1.04)) = 4 -> 28 * 1.04^4 = 32.756
+        const k = Math.floor(Math.log(initialPrice / lowerPrice) / Math.log(1 + ratio));
+        if (k >= 0) {
+            basePrice = Number((lowerPrice * Math.pow(1 + ratio, k)).toFixed(4));
+        }
+    }
 
     const downLines = [];
     let curDown = basePrice;
