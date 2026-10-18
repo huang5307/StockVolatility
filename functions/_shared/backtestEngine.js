@@ -225,6 +225,7 @@ export function runBacktest(kline, opts = {}) {
                             date: curDate,
                             amount: Number(buyCost.toFixed(2)),
                             cumulativeCost: Number(currentGridCashDeployed.toFixed(2)),
+                            cumulativeProfit: Number(realizedProfit.toFixed(2)),
                             currentStockUnits,
                             targetSellPrice,
                             note: `跌破蛛網線 $${line.toFixed(2)} 買進 ${orderQuantityUnits} ${unitInfo.unitName} (目標止盈價 $${targetSellPrice.toFixed(2)})`
@@ -247,6 +248,7 @@ export function runBacktest(kline, opts = {}) {
                             date: curDate,
                             amount: Number(buyCost.toFixed(2)),
                             cumulativeCost: Number(currentGridCashDeployed.toFixed(2)),
+                            cumulativeProfit: Number(realizedProfit.toFixed(2)),
                             currentStockUnits,
                             note: `⚠️ 跌破蛛網線 $${line.toFixed(2)} 觸發買點，但可用現金僅 $${Math.round(cash).toLocaleString()} 不足支付 $${Math.round(buyCost).toLocaleString()}，資金斷糧暫停承接`
                         });
@@ -292,6 +294,7 @@ export function runBacktest(kline, opts = {}) {
                     amount: Number(revenue.toFixed(2)),
                     costReleased: Number(costReleased.toFixed(2)),
                     cumulativeCost: Number(currentGridCashDeployed.toFixed(2)),
+                    cumulativeProfit: Number(realizedProfit.toFixed(2)),
                     pnl: Number(pnl.toFixed(2)),
                     buyPrice: pos.buyPrice,
                     buyDate: pos.date,

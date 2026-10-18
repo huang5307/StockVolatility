@@ -1458,9 +1458,13 @@ document.addEventListener('DOMContentLoaded', () => {
             ? `成交 ${realTradesCount} 筆 / 斷糧停擺 ${missedTradesCount} 筆`
             : `${realTradesCount} 筆成交`;
 
+        let runningProfit = 0;
         trades.forEach(tr => {
             const isBuy = tr.type === 'buy';
             const isMissed = tr.type === 'missed_buy';
+            if (tr.pnl !== undefined) {
+                runningProfit += tr.pnl;
+            }
             const trRow = document.createElement('tr');
             if (isMissed) {
                 trRow.className = 'table-warning';
@@ -1475,10 +1479,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 badgeHtml = '<span class="badge bg-success">賣出</span>';
             }
 
-            const pnlText = tr.pnl !== undefined
-                ? `<span class="${tr.pnl >= 0 ? 'text-profit' : 'text-loss'} fw-bold">${tr.pnl >= 0 ? '+' : ''}$${tr.pnl.toLocaleString()}</span>`
-                : '-';
-
+            // 累計金額與當期變動
             let costHtml = '<span class="text-muted">未成交</span>';
             if (!isMissed) {
                 const cumCost = tr.cumulativeCost !== undefined ? tr.cumulativeCost : tr.amount;
@@ -1488,13 +1489,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 costHtml = `<strong>$${Math.round(cumCost).toLocaleString()}</strong><br/>${changeStr}`;
             }
 
+            // 累計盈虧與當次平倉盈虧
+            let pnlHtml = '<span class="text-muted">-</span>';
+            if (!isMissed) {
+                const cumPnl = tr.cumulativeProfit !== undefined ? Math.round(tr.cumulativeProfit) : Math.round(runningProfit);
+                const cumClass = cumPnl > 0 ? 'text-profit' : (cumPnl < 0 ? 'text-loss' : 'text-muted');
+                const cumSign = cumPnl > 0 ? '+' : '';
+
+                let curPnlStr = '<small class="text-muted">-</small>';
+                if (tr.pnl !== undefined) {
+                    const curPnl = Math.round(tr.pnl);
+                    const curClass = curPnl >= 0 ? 'text-profit' : 'text-loss';
+                    const curSign = curPnl >= 0 ? '+' : '';
+                    curPnlStr = `<small class="${curClass} fw-semibold">(${curSign}$${curPnl.toLocaleString()})</small>`;
+                }
+                pnlHtml = `<strong class="${cumClass}">${cumSign}$${cumPnl.toLocaleString()}</strong><br/>${curPnlStr}`;
+            }
+
             trRow.innerHTML = `
                 <td><small>${tr.date}</small></td>
                 <td>${badgeHtml}</td>
                 <td>$${tr.price.toFixed(2)}</td>
                 <td>${tr.units} ${tr.unitName || unit}</td>
                 <td>${costHtml}</td>
-                <td>${pnlText}</td>
+                <td>${pnlHtml}</td>
                 <td><small class="${isMissed ? 'text-danger fw-semibold' : 'text-muted'}">${tr.note || '-'}</small></td>
             `;
             tradesTableBody.appendChild(trRow);
