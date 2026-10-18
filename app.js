@@ -61,36 +61,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const thLayersAbsorbed = document.getElementById('th-layers-absorbed');
     const thStressNeeded = document.getElementById('th-stress-needed');
 
-    // 全域風控參數偏好持久化 (localStorage)
-    const MAX_LAYERS_KEY = 'stock_grid_max_layers';
-    const STRESS_DROP_KEY = 'stock_grid_stress_drop';
-    const savedMaxLayers = localStorage.getItem(MAX_LAYERS_KEY);
-    if (savedMaxLayers && btMaxLayers) btMaxLayers.value = savedMaxLayers;
-    const savedStressDrop = localStorage.getItem(STRESS_DROP_KEY);
-    if (savedStressDrop && btStressDrop) btStressDrop.value = savedStressDrop;
-
-    if (btMaxLayers) {
-        btMaxLayers.addEventListener('change', () => {
-            const val = Math.max(2, Math.min(50, parseInt(btMaxLayers.value || 8, 10)));
-            btMaxLayers.value = val;
-            localStorage.setItem(MAX_LAYERS_KEY, val);
-            if (currentLoadedStock) {
-                triggerAutoOptimization();
-            }
-        });
-    }
-    if (btStressDrop) {
-        btStressDrop.addEventListener('change', () => {
-            const val = Math.max(5, Math.min(90, parseFloat(btStressDrop.value || 20)));
-            btStressDrop.value = val;
-            localStorage.setItem(STRESS_DROP_KEY, val);
-            if (currentLoadedStock) {
-                triggerAutoOptimization();
-            }
-        });
-    }
-
-    // 標的專屬交易條件記憶 (依據股票/ETF代號獨立保存，切換時自動繼承)
+    // 標的專屬交易條件記憶 (依據股票/ETF代號獨立保存，切換時自動繼承，包含最大承接層數與預防波段跌幅)
     const PER_STOCK_SETTINGS_KEY = 'stock_grid_per_stock_settings';
 
     const getStockSettings = (code) => {
@@ -111,6 +82,8 @@ document.addEventListener('DOMContentLoaded', () => {
             all[code.toUpperCase()] = {
                 gridPercent: btGridPercent?.value || '3.0',
                 orderQuantity: btOrderQuantity?.value || '1',
+                maxLayers: btMaxLayers?.value || '7',
+                stressDrop: btStressDrop?.value || '20',
                 initialStock: btInitialStock?.value || '0',
                 maxStock: btMaxStock?.value || '',
                 minStock: btMinStock?.value || '0',
@@ -123,7 +96,24 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
 
-    // 智能防抖自動重算尋優（當使用者更改表單條件或全局風控時自動觸發）
+    // 若有上次記憶之標的，預先恢復其專屬交易條件
+    if (lastStockCode) {
+        const initialCode = lastStockCode.split(' ')[0].trim();
+        const initSaved = getStockSettings(initialCode);
+        if (initSaved) {
+            if (btGridPercent && initSaved.gridPercent !== undefined) btGridPercent.value = initSaved.gridPercent;
+            if (btOrderQuantity && initSaved.orderQuantity !== undefined) btOrderQuantity.value = initSaved.orderQuantity;
+            if (btMaxLayers && initSaved.maxLayers !== undefined) btMaxLayers.value = initSaved.maxLayers;
+            if (btStressDrop && initSaved.stressDrop !== undefined) btStressDrop.value = initSaved.stressDrop;
+            if (btInitialStock && initSaved.initialStock !== undefined) btInitialStock.value = initSaved.initialStock;
+            if (btMaxStock && initSaved.maxStock !== undefined) btMaxStock.value = initSaved.maxStock;
+            if (btMinStock && initSaved.minStock !== undefined) btMinStock.value = initSaved.minStock;
+            if (btLowerPrice && initSaved.lowerPrice !== undefined) btLowerPrice.value = initSaved.lowerPrice;
+            if (btUpperPrice && initSaved.upperPrice !== undefined) btUpperPrice.value = initSaved.upperPrice;
+        }
+    }
+
+    // 智能防抖自動重算尋優（當使用者更改表單條件或風控時自動觸發）
     let optDebounceTimer = null;
     const triggerDebouncedAutoOptimization = (delay = 400) => {
         if (!currentLoadedStock) return;
@@ -134,9 +124,14 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     // 監聽交易條件表單中任一輸入變動，即時自動存入瀏覽器並自動觸發參數尋優重新計算
-    [btGridPercent, btOrderQuantity, btInitialStock, btMaxStock, btMinStock, btLowerPrice, btUpperPrice].forEach(input => {
+    [btGridPercent, btOrderQuantity, btMaxLayers, btStressDrop, btInitialStock, btMaxStock, btMinStock, btLowerPrice, btUpperPrice].forEach(input => {
         if (input) {
             input.addEventListener('change', () => {
+                if (input === btMaxLayers) {
+                    input.value = Math.max(2, Math.min(50, parseInt(input.value || 7, 10)));
+                } else if (input === btStressDrop) {
+                    input.value = Math.max(5, Math.min(90, parseFloat(input.value || 20)));
+                }
                 saveCurrentStockSettings();
                 triggerDebouncedAutoOptimization(200);
             });
@@ -930,6 +925,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (saved) {
             if (btGridPercent) btGridPercent.value = saved.gridPercent !== undefined ? saved.gridPercent : '3.0';
             if (btOrderQuantity) btOrderQuantity.value = saved.orderQuantity !== undefined ? saved.orderQuantity : '1';
+            if (btMaxLayers) btMaxLayers.value = saved.maxLayers !== undefined ? saved.maxLayers : '7';
+            if (btStressDrop) btStressDrop.value = saved.stressDrop !== undefined ? saved.stressDrop : '20';
             if (btInitialStock) btInitialStock.value = saved.initialStock !== undefined ? saved.initialStock : '0';
             if (btMaxStock) btMaxStock.value = saved.maxStock !== undefined ? saved.maxStock : '';
             if (btMinStock) btMinStock.value = saved.minStock !== undefined ? saved.minStock : '0';
@@ -938,6 +935,8 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             if (btGridPercent) btGridPercent.value = '3.0';
             if (btOrderQuantity) btOrderQuantity.value = '1';
+            if (btMaxLayers) btMaxLayers.value = '7';
+            if (btStressDrop) btStressDrop.value = '20';
             if (btInitialStock) btInitialStock.value = '0';
             if (btMaxStock) btMaxStock.value = '';
             if (btMinStock) btMinStock.value = '0';
@@ -982,7 +981,7 @@ document.addEventListener('DOMContentLoaded', () => {
             initialCash: btInitialCash ? btInitialCash.value : '',
             lowerPrice: lowerVal,
             upperPrice: upperVal,
-            maxGridLayers: btMaxLayers ? parseInt(btMaxLayers.value || 8, 10) : 8,
+            maxGridLayers: btMaxLayers ? parseInt(btMaxLayers.value || 7, 10) : 7,
             stressDropPct: btStressDrop ? parseFloat(btStressDrop.value || 20) : 20
         };
 
@@ -1016,7 +1015,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const rec = data.recommendations;
         const unit = data.unitInfo?.unitName || (isTaiwanCode(data.symbol) ? '張' : '手');
-        const maxLayers = data.maxGridLayers || (btMaxLayers ? parseInt(btMaxLayers.value || 8, 10) : 8);
+        const maxLayers = data.maxGridLayers || (btMaxLayers ? parseInt(btMaxLayers.value || 7, 10) : 7);
         const stressDrop = data.stressDropPct || (btStressDrop ? parseFloat(btStressDrop.value || 20) : 20);
 
         // 動態更新表頭層數與跌幅數值
@@ -1256,7 +1255,7 @@ document.addEventListener('DOMContentLoaded', () => {
             initialCash: btInitialCash ? btInitialCash.value : '',
             lowerPrice: lowerVal,
             upperPrice: upperVal,
-            maxGridLayers: btMaxLayers ? parseInt(btMaxLayers.value || 8, 10) : 8,
+            maxGridLayers: btMaxLayers ? parseInt(btMaxLayers.value || 7, 10) : 7,
             stressDropPct: btStressDrop ? parseFloat(btStressDrop.value || 20) : 20
         };
 
@@ -1342,7 +1341,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // 5. 跌幅考驗 / 疊層風控
         const downsideEl = document.getElementById('res-downside-buffer');
-        const maxLayers = sum.maxGridLayers || (btMaxLayers ? btMaxLayers.value : 8);
+        const maxLayers = sum.maxGridLayers || (btMaxLayers ? btMaxLayers.value : 7);
         const stressDrop = sum.stressDropPct || (btStressDrop ? btStressDrop.value : 20);
         if (downsideEl) {
             const dsVal = sum.actualAbsorbedDropPct !== undefined ? `-${sum.actualAbsorbedDropPct}%` : (sum.downsideBufferPct !== undefined ? `-${sum.downsideBufferPct}%` : '--');

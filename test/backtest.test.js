@@ -242,7 +242,16 @@ const assert = require('assert');
     assert.strictEqual(cnRes.maxCapitalDeployed, cnRes.peakGridCashDeployed, '陸股最大佔用本金應為真實回測動用資金峰值 (peakGridCashDeployed)');
     assert.strictEqual(cnRes.gridReturn, Number((cnRes.realizedProfit / cnRes.maxCapitalDeployed).toFixed(4)), '陸股套利報酬率分母必須為實際佔用本金');
 
-    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件 + 排除原始庫存本金公式」單測全部通過！');
+    console.log('--- 測試 8: 預設值驗證 (未傳入時預設 7 層、20% 預防波段跌幅) ---');
+    const defaultBt = runBacktest(sampleKLine, { symbol: '2330', gridPercent: 3.0 });
+    assert.strictEqual(defaultBt.maxGridLayers, 7, '回測未指定層數時應預設為 7 層');
+    assert.strictEqual(defaultBt.stressDropPct, 20, '回測未指定預防跌幅時應預設為 20%');
+
+    const defaultOpt = optimizeGrid(sampleKLine, { symbol: '2330' });
+    assert.strictEqual(defaultOpt.maxGridLayers, 7, '尋優未指定層數時應預設為 7 層');
+    assert.strictEqual(defaultOpt.stressDropPct, 20, '尋優未指定預防跌幅時應預設為 20%');
+
+    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件 (預設7層/20%) + 排除原始庫存本金公式」單測全部通過！');
 })().catch(err => {
     console.error('測試失敗:', err);
     process.exit(1);

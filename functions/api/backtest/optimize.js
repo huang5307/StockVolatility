@@ -28,7 +28,7 @@ export async function onRequest(context) {
         initialCash,
         lowerPrice,
         upperPrice,
-        maxGridLayers = 8,
+        maxGridLayers = 7,
         stressDropPct = 20.0
     } = params;
 
@@ -77,7 +77,7 @@ export async function onRequest(context) {
             initialCash: initialCash !== undefined && initialCash !== '' ? parseFloat(initialCash) : undefined,
             lowerPrice: lowerPrice !== undefined && lowerPrice !== '' ? parseFloat(lowerPrice) : undefined,
             upperPrice: upperPrice !== undefined && upperPrice !== '' ? parseFloat(upperPrice) : undefined,
-            maxGridLayers: parseInt(maxGridLayers, 10) || 8,
+            maxGridLayers: parseInt(maxGridLayers, 10) || 7,
             stressDropPct: parseFloat(stressDropPct) || 20.0
         };
 
