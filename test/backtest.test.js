@@ -242,16 +242,45 @@ const assert = require('assert');
     assert.strictEqual(cnRes.maxCapitalDeployed, cnRes.peakGridCashDeployed, '陸股最大佔用本金應為真實回測動用資金峰值 (peakGridCashDeployed)');
     assert.strictEqual(cnRes.gridReturn, Number((cnRes.realizedProfit / cnRes.maxCapitalDeployed).toFixed(4)), '陸股套利報酬率分母必須為實際佔用本金');
 
-    console.log('--- 測試 8: 預設值驗證 (未傳入時預設 7 層、20% 預防波段跌幅) ---');
-    const defaultBt = runBacktest(sampleKLine, { symbol: '2330', gridPercent: 3.0 });
-    assert.strictEqual(defaultBt.maxGridLayers, 7, '回測未指定層數時應預設為 7 層');
-    assert.strictEqual(defaultBt.stressDropPct, 20, '回測未指定預防跌幅時應預設為 20%');
+    console.log('--- 測試 9: 實盤區間下限 (lowerPrice) 與風控安全評級真實對齊驗證 ---');
+    // 模擬 00891 實盤情境：起始價 33.35，區間下限 28.0 (跌幅 16.0%)，預算 8 層，預防波段跌幅 36%
+    const mockKLineForFloor = [
+        { date: '2026-07-17', high: 33.5, low: 33.0, close: 33.35 },
+        { date: '2026-07-18', high: 33.2, low: 32.0, close: 32.5 }
+    ];
 
-    const defaultOpt = optimizeGrid(sampleKLine, { symbol: '2330' });
-    assert.strictEqual(defaultOpt.maxGridLayers, 7, '尋優未指定層數時應預設為 7 層');
-    assert.strictEqual(defaultOpt.stressDropPct, 20, '尋優未指定預防跌幅時應預設為 20%');
+    // 2% 間距：至 28.0 僅需 8 層買單即可覆蓋，策略在 28.0 以下停止承接，因此 8 層預算足以防禦整個買入區間 -> safe
+    const resFloor2Pct = runBacktest(mockKLineForFloor, {
+        symbol: '00891',
+        gridPercent: 2.0,
+        lowerPrice: 28.0,
+        maxGridLayers: 8,
+        stressDropPct: 36.0
+    });
+    console.log('2% 下限風控驗證:', {
+        有效防跌考驗: `${resFloor2Pct.effectiveStressDropPct}%`,
+        實質所需層數: resFloor2Pct.layersNeededForStress,
+        是否易擊穿: resFloor2Pct.isDangerous,
+        評級: resFloor2Pct.riskRating
+    });
+    assert.strictEqual(resFloor2Pct.effectiveStressDropPct, 16.0, '因下限為 28.0 (跌幅16%)，有效防跌考驗應為 16.0% 而非 36%');
+    assert.strictEqual(resFloor2Pct.layersNeededForStress, 8, '2% 間距跌至 28.0 僅需 8 層，而非無邊界推算的 23 層');
+    assert.strictEqual(resFloor2Pct.isDangerous, false, '8 層預算足以滿足 8 層下限需求，應判定為安全合格');
+    assert.strictEqual(resFloor2Pct.riskRating, 'safe', '風險評級應為 safe');
 
-    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件 (預設7層/20%) + 排除原始庫存本金公式」單測全部通過！');
+    // 1% 間距：至 28.0 需 17 層買單，8 層預算不足 -> danger
+    const resFloor1Pct = runBacktest(mockKLineForFloor, {
+        symbol: '00891',
+        gridPercent: 1.0,
+        lowerPrice: 28.0,
+        maxGridLayers: 8,
+        stressDropPct: 36.0
+    });
+    assert.strictEqual(resFloor1Pct.layersNeededForStress, 17, '1% 間距跌至 28.0 需 17 層');
+    assert.strictEqual(resFloor1Pct.isDangerous, true, '8 層預算不足以承受 17 層，應判定為易擊穿');
+    assert.strictEqual(resFloor1Pct.riskRating, 'danger', '風險評級應為 danger');
+
+    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件 (含實盤區間下限真實對齊) + 排除原始庫存本金公式」單測全部通過！');
 })().catch(err => {
     console.error('測試失敗:', err);
     process.exit(1);

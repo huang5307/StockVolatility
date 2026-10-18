@@ -1019,8 +1019,15 @@ document.addEventListener('DOMContentLoaded', () => {
         const stressDrop = data.stressDropPct || (btStressDrop ? parseFloat(btStressDrop.value || 20) : 20);
 
         // 動態更新表頭層數與跌幅數值
+        const effStress = data.effectiveStressDropPct !== undefined ? data.effectiveStressDropPct : stressDrop;
         if (thLayersAbsorbed) thLayersAbsorbed.innerText = `${maxLayers}層極限抗跌`;
-        if (thStressNeeded) thStressNeeded.innerText = `抗${stressDrop}%所需層數`;
+        if (thStressNeeded) {
+            if (data.conditions?.lowerPrice && effStress < stressDrop) {
+                thStressNeeded.innerText = `抗${effStress}% (達下限$${data.conditions.lowerPrice}) 所需層數`;
+            } else {
+                thStressNeeded.innerText = `抗${stressDrop}%所需層數`;
+            }
+        }
 
         // 顯示當前依據的實盤條件標籤
         if (optimizeConditionsBadge) {
@@ -1034,7 +1041,11 @@ document.addEventListener('DOMContentLoaded', () => {
                 parts.push(`價格區間 <strong>$${cond.lowerPrice || '0'} ~ $${cond.upperPrice || '不限'}</strong>`);
             }
             parts.push(`<strong>${maxLayers}層</strong>承接`);
-            parts.push(`防跌 <strong>${stressDrop}%</strong>`);
+            if (cond.lowerPrice && effStress < stressDrop) {
+                parts.push(`實質防跌 <strong>${effStress}% (達下限$${cond.lowerPrice}停買)</strong>`);
+            } else {
+                parts.push(`防跌 <strong>${stressDrop}%</strong>`);
+            }
             optimizeConditionsBadge.innerHTML = `當前尋優依據：${parts.join(' | ')}`;
             optimizeConditionsBadge.style.display = 'block';
         }

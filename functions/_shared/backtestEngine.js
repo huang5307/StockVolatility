@@ -44,7 +44,8 @@ export function runBacktest(kline, opts = {}) {
     const sharesPerTrade = orderQuantityUnits * multiplier;
 
     // 價格區間設定與防呆校驗
-    let lowerPrice = opts.lowerPrice !== undefined && opts.lowerPrice !== '' && !isNaN(opts.lowerPrice)
+    const hasUserLowerPrice = (opts.lowerPrice !== undefined && opts.lowerPrice !== '' && !isNaN(opts.lowerPrice) && Number(opts.lowerPrice) > 0);
+    let lowerPrice = hasUserLowerPrice
         ? Math.max(0.01, Number(opts.lowerPrice))
         : Math.max(0.01, Number((minHistoryPrice * 0.92).toFixed(2)));
 
@@ -137,16 +138,55 @@ export function runBacktest(kline, opts = {}) {
     let closedTrades = 0;
     let tradeId = 1;
 
-    // === 實盤風控評估：基於「最大疊層數」與「常規極限跌幅考驗 (預設20%)」===
-    // 1. 在用戶預算 maxGridLayers 層內，實際能承受的最大連續跌幅 (%)
+    // === 實盤風控評估：結合真實交易約束條件（區間下限 lowerPrice、庫存上限 maxStock、最大承接層數 maxGridLayers、預防波段跌幅 stressDropPct）===
+    // 1. 在用戶預算 maxGridLayers 層內，跳動間距連續買滿時理論能承受的最大跌幅 (%)
     const actualAbsorbedDropPct = Number(((1 - Math.pow(1 - ratio, maxGridLayers)) * 100).toFixed(1));
-    // 2. 若要完整防禦 stressDropPct (如 20%) 的常態回檔，所需的買進層數
-    const layersNeededForStress = Math.max(1, Math.ceil(Math.log(1 - stressDropPct / 100) / Math.log(1 - ratio)));
-    // 3. 判定是否危險：所需層數 > 預算層數，或抗跌深度 < 考驗跌幅
-    const isDangerous = layersNeededForStress > maxGridLayers || actualAbsorbedDropPct < stressDropPct;
+
+    // 2. 判定在真實下單條件下，價格下跌時系統實際會買進的「有效目標底價 (effectiveTargetFloorPrice)」：
+    //    若設定了「區間下限 (低於不買 lowerPrice)」且 lowerPrice < initialPrice：
+    //    在跌破 lowerPrice 之後，策略嚴格禁止承接買單。
+    //    因此若預防跌幅 stressDropPct 比 lowerPrice 更深（例如 36% 跌到 $21，但下限設 $28），
+    //    跌破 $28 後根本不會觸發任何買單，實際需要防禦的買入深度僅至 $28 為止！
+    const stressDropPrice = initialPrice * (1 - stressDropPct / 100);
+    const hasLowerPrice = hasUserLowerPrice && lowerPrice > 0 && lowerPrice < initialPrice;
+    const effectiveTargetFloorPrice = hasLowerPrice
+        ? Math.max(lowerPrice, stressDropPrice)
+        : stressDropPrice;
+
+    const effectiveStressDropPct = Number((((initialPrice - effectiveTargetFloorPrice) / initialPrice) * 100).toFixed(1));
+
+    // 3. 計算在當前跳動間距與真實網格線配置下，從 initialPrice 跌至 effectiveTargetFloorPrice 實際需要觸發的買進層數：
+    const buyLinesDown = gridLines.filter(line => 
+        line < initialPrice && 
+        line >= effectiveTargetFloorPrice - 0.0001 && 
+        (!hasLowerPrice || line >= lowerPrice - 0.0001)
+    );
+
+    let layersNeededForStress;
+    if (hasLowerPrice) {
+        layersNeededForStress = Math.max(1, buyLinesDown.length);
+    } else {
+        layersNeededForStress = Math.max(1, Math.ceil(Math.log(1 - stressDropPct / 100) / Math.log(1 - ratio)));
+    }
+
+    // 4. 判定是否危險 (isDangerous)：
+    //    以真實需要承接的層數是否超出預算的 maxGridLayers 為嚴格判定標準！
+    //    若 layersNeededForStress <= maxGridLayers，代表在預算層數之內就能完整抵達區間下限或滿足波段跌幅，絕不超出預算 -> 🛡️ 安全合格；
+    //    若 layersNeededForStress > maxGridLayers，代表在到達區間下限或目標跌幅之前，預算層數就會先被耗盡擊穿 -> ⚠️ 易擊穿。
+    const isDangerous = layersNeededForStress > maxGridLayers;
     const riskRating = isDangerous ? 'danger' : 'safe';
-    // 4. 預算層數全滿時的極限斷糧價格（跌破此價位手頭現金即用盡，停止承接）
-    const starvationPrice = Number((initialPrice * Math.pow(1 - ratio, maxGridLayers)).toFixed(2));
+
+    // 5. 預算層數用盡時的極限斷糧/停買價格 (starvationPrice)：
+    let starvationPrice;
+    if (!isDangerous && hasLowerPrice && effectiveTargetFloorPrice >= lowerPrice) {
+        // 安全合格且到達區間下限：以區間下限為見底停買價格
+        starvationPrice = Number(effectiveTargetFloorPrice.toFixed(2));
+    } else {
+        const budgetLastLine = (buyLinesDown.length >= maxGridLayers)
+            ? buyLinesDown[maxGridLayers - 1]
+            : initialPrice * Math.pow(1 - ratio, maxGridLayers);
+        starvationPrice = Number(budgetLastLine.toFixed(2));
+    }
     const downsideBufferPct = actualAbsorbedDropPct;
 
     let missedBuys = 0;
@@ -392,6 +432,8 @@ export function runBacktest(kline, opts = {}) {
         // 實盤風控評估：基於「最大疊層數」與「常態極限跌幅考驗 (預設20%)」
         maxGridLayers,
         stressDropPct,
+        effectiveStressDropPct,
+        effectiveTargetFloorPrice,
         actualAbsorbedDropPct,
         layersNeededForStress,
         isDangerous,
@@ -497,6 +539,8 @@ export function optimizeGrid(kline, baseOpts = {}) {
                 finalEquity: res.finalEquity,
                 maxGridLayers: res.maxGridLayers,
                 stressDropPct: res.stressDropPct,
+                effectiveStressDropPct: res.effectiveStressDropPct,
+                effectiveTargetFloorPrice: res.effectiveTargetFloorPrice,
                 actualAbsorbedDropPct: res.actualAbsorbedDropPct,
                 layersNeededForStress: res.layersNeededForStress,
                 isDangerous: res.isDangerous,
@@ -544,6 +588,8 @@ export function optimizeGrid(kline, baseOpts = {}) {
         avgDailyVolatilityPct,
         maxGridLayers,
         stressDropPct,
+        effectiveStressDropPct: scanResults[0]?.effectiveStressDropPct ?? stressDropPct,
+        effectiveTargetFloorPrice: scanResults[0]?.effectiveTargetFloorPrice,
         currentGridPercent: (baseOpts.gridPercent !== undefined && baseOpts.gridPercent !== '' && !isNaN(baseOpts.gridPercent)) ? Number(parseFloat(baseOpts.gridPercent).toFixed(1)) : undefined,
         conditions: {
             orderQuantity: orderQuantityUnits,

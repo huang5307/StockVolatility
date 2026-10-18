@@ -147,6 +147,8 @@ export async function onRequest(context) {
                 unrealizedProfit: result.unrealizedProfit,
                 maxGridLayers: result.maxGridLayers,
                 stressDropPct: result.stressDropPct,
+                effectiveStressDropPct: result.effectiveStressDropPct,
+                effectiveTargetFloorPrice: result.effectiveTargetFloorPrice,
                 actualAbsorbedDropPct: result.actualAbsorbedDropPct,
                 layersNeededForStress: result.layersNeededForStress,
                 isDangerous: result.isDangerous,
