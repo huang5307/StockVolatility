@@ -45,6 +45,7 @@ export function runBacktest(kline, opts = {}) {
 
     // 價格區間設定與防呆校驗
     const hasUserLowerPrice = (opts.lowerPrice !== undefined && opts.lowerPrice !== '' && !isNaN(opts.lowerPrice) && Number(opts.lowerPrice) > 0);
+    const hasUserUpperPrice = (opts.upperPrice !== undefined && opts.upperPrice !== '' && !isNaN(opts.upperPrice) && Number(opts.upperPrice) > 0);
     let lowerPrice = hasUserLowerPrice
         ? Math.max(0.01, Number(opts.lowerPrice))
         : Math.max(0.01, Number((minHistoryPrice * 0.92).toFixed(2)));
@@ -155,39 +156,18 @@ export function runBacktest(kline, opts = {}) {
 
     const effectiveStressDropPct = Number((((initialPrice - effectiveTargetFloorPrice) / initialPrice) * 100).toFixed(1));
 
-    // 3. 計算在當前跳動間距與真實網格線配置下，從 initialPrice 跌至 effectiveTargetFloorPrice 實際需要觸發的買進層數：
+    // 3. 計算在當前跳動間距與真實網格線配置下，從 initialPrice 跌至 effectiveTargetFloorPrice 理論網格線數：
     const buyLinesDown = gridLines.filter(line => 
         line < initialPrice && 
         line >= effectiveTargetFloorPrice - 0.0001 && 
         (!hasLowerPrice || line >= lowerPrice - 0.0001)
     );
 
-    let layersNeededForStress;
-    if (hasLowerPrice) {
-        layersNeededForStress = Math.max(1, buyLinesDown.length);
-    } else {
-        layersNeededForStress = Math.max(1, Math.ceil(Math.log(1 - stressDropPct / 100) / Math.log(1 - ratio)));
-    }
-
-    // 4. 判定是否危險 (isDangerous)：
-    //    以真實需要承接的層數是否超出預算的 maxGridLayers 為嚴格判定標準！
-    //    若 layersNeededForStress <= maxGridLayers，代表在預算層數之內就能完整抵達區間下限或滿足波段跌幅，絕不超出預算 -> 🛡️ 安全合格；
-    //    若 layersNeededForStress > maxGridLayers，代表在到達區間下限或目標跌幅之前，預算層數就會先被耗盡擊穿 -> ⚠️ 易擊穿。
-    const isDangerous = layersNeededForStress > maxGridLayers;
-    const riskRating = isDangerous ? 'danger' : 'safe';
-
-    // 5. 預算層數用盡時的極限斷糧/停買價格 (starvationPrice)：
-    let starvationPrice;
-    if (!isDangerous && hasLowerPrice && effectiveTargetFloorPrice >= lowerPrice) {
-        // 安全合格且到達區間下限：以區間下限為見底停買價格
-        starvationPrice = Number(effectiveTargetFloorPrice.toFixed(2));
-    } else {
-        const budgetLastLine = (buyLinesDown.length >= maxGridLayers)
-            ? buyLinesDown[maxGridLayers - 1]
-            : initialPrice * Math.pow(1 - ratio, maxGridLayers);
-        starvationPrice = Number(budgetLastLine.toFixed(2));
-    }
-    const downsideBufferPct = actualAbsorbedDropPct;
+    // 追蹤回測中真實發生的風控動態指標
+    let maxOpenLayers = 0;
+    let maxDrawdownLayers = 0;
+    let peakPrice = initialPrice;
+    let maxPriceDropPct = 0;
 
     let missedBuys = 0;
     const missedBuyRecords = [];
@@ -221,6 +201,24 @@ export function runBacktest(kline, opts = {}) {
         const dayClose = Number(item.close);
         const curDate = item.date;
 
+        // 追蹤回測期間價格峰值與最大波段跌幅及下跌層數
+        // 若設定了區間上限與下限，網格僅在該區間內運作（低於不買、高於不賣）
+        const effectiveHigh = (hasUserUpperPrice && upperPrice > 0) ? Math.min(upperPrice, dayHigh) : dayHigh;
+        if (effectiveHigh > peakPrice) {
+            peakPrice = effectiveHigh;
+        }
+        const effectiveLow = (hasUserLowerPrice && lowerPrice > 0) ? Math.max(lowerPrice, dayLow) : dayLow;
+        if (peakPrice > 0 && effectiveLow < peakPrice) {
+            const currentDrop = ((peakPrice - effectiveLow) / peakPrice) * 100;
+            if (currentDrop > maxPriceDropPct) {
+                maxPriceDropPct = currentDrop;
+            }
+            const waveLayers = Math.floor(Math.log(peakPrice / effectiveLow) / Math.log(1 + ratio));
+            if (waveLayers > maxDrawdownLayers) {
+                maxDrawdownLayers = waveLayers;
+            }
+        }
+
         // --- 1. 逢跌觸網買入判斷 (Low 跌破某一網格線) ---
         for (let g = 0; g < gridLines.length; g++) {
             const line = gridLines[g];
@@ -250,6 +248,10 @@ export function runBacktest(kline, opts = {}) {
                             gridLine: line,
                             targetSellPrice: targetSellPrice
                         });
+
+                        if (openPositions.length > maxOpenLayers) {
+                            maxOpenLayers = openPositions.length;
+                        }
 
                         currentGridCashDeployed += buyCost;
                         if (currentGridCashDeployed > peakGridCashDeployed) {
@@ -401,6 +403,48 @@ export function runBacktest(kline, opts = {}) {
 
     const totalBuySignals = executedBuys + missedBuys;
     const capitalExhaustionRate = totalBuySignals > 0 ? Number(((missedBuys / totalBuySignals) * 100).toFixed(1)) : 0;
+    // === 實盤風控評判標準（依據回測真實過程）===
+    // 回測整個過程的最大下跌層數：包含策略實際持倉峰值、價格在交易區間內經歷的最大波段下跌層數、以及資金斷糧受阻層數
+    const maxBacktestLayers = Math.max(
+        maxOpenLayers,
+        maxDrawdownLayers,
+        missedBuys > 0 ? (maxOpenLayers + missedBuys) : 0
+    );
+
+    // 1. 回測整個過程中，最大的下跌層數會不會超過 maxGridLayers（例如 10 層）
+    // 2. 回測整個過程中，最大的下跌會不會超過 stressDropPct（例如 35%）
+    // 3. 是否發生過資金斷糧 / 買單受阻 (missedBuys > 0)
+    // 若任一條件成立，則標識為危險 (⚠️ 易擊穿)；若皆未超過，則標識為安全合格 (🛡️ 安全合格)
+    const layersExceeded = maxBacktestLayers > maxGridLayers;
+    const dropExceeded = maxPriceDropPct > stressDropPct;
+    const isDangerous = layersExceeded || dropExceeded || (missedBuys > 0);
+    const riskRating = isDangerous ? 'danger' : 'safe';
+
+    let riskReason = '';
+    if (layersExceeded && dropExceeded) {
+        riskReason = `回測最大承接 ${maxBacktestLayers} 層 (>預算${maxGridLayers}層) 且跌幅 ${maxPriceDropPct.toFixed(1)}% (>預防${stressDropPct}%)`;
+    } else if (layersExceeded) {
+        riskReason = `回測最大承接 ${maxBacktestLayers} 層 > 預算 ${maxGridLayers} 層`;
+    } else if (dropExceeded) {
+        riskReason = `回測最大跌幅 ${maxPriceDropPct.toFixed(1)}% > 預防 ${stressDropPct}%`;
+    } else if (missedBuys > 0) {
+        riskReason = `回測資金斷糧受阻 ${missedBuys} 筆`;
+    } else {
+        riskReason = `回測最大承接 ${maxBacktestLayers} 層 ≤ 預算 ${maxGridLayers} 層，跌幅 ${maxPriceDropPct.toFixed(1)}% ≤ ${stressDropPct}%`;
+    }
+
+    // 預算層數用盡時的極限斷糧/停買價格 (starvationPrice)：
+    let starvationPrice;
+    if (!isDangerous && hasLowerPrice && effectiveTargetFloorPrice >= lowerPrice) {
+        starvationPrice = Number(effectiveTargetFloorPrice.toFixed(2));
+    } else {
+        const budgetLastLine = (buyLinesDown.length >= maxGridLayers)
+            ? buyLinesDown[maxGridLayers - 1]
+            : initialPrice * Math.pow(1 - ratio, maxGridLayers);
+        starvationPrice = Number(budgetLastLine.toFixed(2));
+    }
+    const downsideBufferPct = actualAbsorbedDropPct;
+
     // 網格風報比 (Grid Health Ratio): 套利純收益率 * 抗跌承接深度 / (1 + 斷糧受阻筆數 * 2)
     const gridHealthRatio = Number((
         (gridReturn * 100) * (downsideBufferPct / 100) / (1 + missedBuys * 2)
@@ -429,15 +473,18 @@ export function runBacktest(kline, opts = {}) {
         annualizedGridReturn: Number(annualizedGridReturn.toFixed(4)),
         avgProfitPerTrade,
 
-        // 實盤風控評估：基於「最大疊層數」與「常態極限跌幅考驗 (預設20%)」
+        // 實盤風控評估：基於回測真實最大下跌層數與最大跌幅
         maxGridLayers,
         stressDropPct,
         effectiveStressDropPct,
         effectiveTargetFloorPrice,
         actualAbsorbedDropPct,
-        layersNeededForStress,
+        maxBacktestLayers,
+        maxPriceDropPct: Number(maxPriceDropPct.toFixed(1)),
         isDangerous,
         riskRating,
+        riskReason,
+        layersNeededForStress: maxBacktestLayers, // 向下相容
         starvationPrice,
         downsideBufferPct: actualAbsorbedDropPct,
         missedBuys,
@@ -539,6 +586,9 @@ export function optimizeGrid(kline, baseOpts = {}) {
                 finalEquity: res.finalEquity,
                 maxGridLayers: res.maxGridLayers,
                 stressDropPct: res.stressDropPct,
+                maxBacktestLayers: res.maxBacktestLayers,
+                maxPriceDropPct: res.maxPriceDropPct,
+                riskReason: res.riskReason,
                 effectiveStressDropPct: res.effectiveStressDropPct,
                 effectiveTargetFloorPrice: res.effectiveTargetFloorPrice,
                 actualAbsorbedDropPct: res.actualAbsorbedDropPct,

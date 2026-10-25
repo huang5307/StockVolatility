@@ -1022,11 +1022,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const effStress = data.effectiveStressDropPct !== undefined ? data.effectiveStressDropPct : stressDrop;
         if (thLayersAbsorbed) thLayersAbsorbed.innerText = `${maxLayers}層極限抗跌`;
         if (thStressNeeded) {
-            if (data.conditions?.lowerPrice && effStress < stressDrop) {
-                thStressNeeded.innerText = `抗${effStress}% (達下限$${data.conditions.lowerPrice}) 所需層數`;
-            } else {
-                thStressNeeded.innerText = `抗${stressDrop}%所需層數`;
-            }
+            thStressNeeded.innerText = `回測最大承接層數 (預算${maxLayers}層)`;
         }
 
         // 顯示當前依據的實盤條件標籤
@@ -1058,7 +1054,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const brAvgProfit = Math.round(br.avgProfitPerTrade || (br.closedTrades > 0 ? br.realizedProfit / br.closedTrades : 0)).toLocaleString();
         const brDownside = br.actualAbsorbedDropPct !== undefined ? `-${br.actualAbsorbedDropPct}%` : '--';
         const brStatus = br.isDangerous 
-            ? `<span class="badge bg-danger-subtle text-danger border border-danger">⚠️ 易擊穿 (需${br.layersNeededForStress}層)</span>` 
+            ? `<span class="badge bg-danger-subtle text-danger border border-danger">⚠️ 易擊穿 (${br.riskReason || `最大${br.maxBacktestLayers || br.layersNeededForStress}層`})</span>` 
             : `<span class="badge bg-success-subtle text-success border border-success">🛡️ 安全合格</span>`;
         recBestReturnDesc.innerHTML = `波動套利純獲利: <strong class="text-success fs-6">+$${brProfit}</strong> (+${brGridRet}%)<br/>${maxLayers}層抗跌: <strong>${brDownside}</strong> (${brStatus}) | 平倉 <strong>${br.closedTrades} 筆</strong> (每筆 +$${brAvgProfit})`;
 
@@ -1070,9 +1066,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const bbAvgProfit = Math.round(bb.avgProfitPerTrade || (bb.closedTrades > 0 ? bb.realizedProfit / bb.closedTrades : 0)).toLocaleString();
         const bbStarveP = bb.starvationPrice ? `$${bb.starvationPrice}` : '--';
         const bbStatus = bb.isDangerous
-            ? `<span class="badge bg-danger">⚠️ 易擊穿 (需 ${bb.layersNeededForStress} 層)</span>`
-            : `<span class="badge bg-success">🛡️ 安全合格 (${bb.layersNeededForStress}層 ≤ 預算${maxLayers}層)</span>`;
-        recBestBalancedDesc.innerHTML = `${maxLayers}層抗跌: <strong>-${bb.actualAbsorbedDropPct}%</strong> (跌破 <strong>${bbStarveP}</strong> 見底)<br/>防禦常態回檔: ${bbStatus}<br/>套利純獲利: <strong class="text-success">+$${bbProfit}</strong> (+${bbGridRet}%) | 每筆 +$${bbAvgProfit}`;
+            ? `<span class="badge bg-danger">⚠️ 易擊穿 (${bb.riskReason || `最大 ${bb.maxBacktestLayers || bb.layersNeededForStress} 層`})</span>`
+            : `<span class="badge bg-success">🛡️ 安全合格 (${bb.maxBacktestLayers || bb.layersNeededForStress}層 ≤ 預算${maxLayers}層)</span>`;
+        const bbDropStr = bb.maxPriceDropPct !== undefined ? `-${bb.maxPriceDropPct}%` : '--';
+        recBestBalancedDesc.innerHTML = `${maxLayers}層抗跌: <strong>-${bb.actualAbsorbedDropPct}%</strong> | 回測最大跌幅: <strong>${bbDropStr}</strong><br/>防禦常態回檔: ${bbStatus}<br/>套利純獲利: <strong class="text-success">+$${bbProfit}</strong> (+${bbGridRet}%) | 每筆 +$${bbAvgProfit}`;
 
         // 3. ATR 建議
         const atrPct = rec.atrRecommendedPercent;
@@ -1106,9 +1103,11 @@ document.addEventListener('DOMContentLoaded', () => {
             else if (isBalanced) rowClass = 'table-info fw-semibold';
             tr.className = rowClass;
 
+            const actualLayers = item.maxBacktestLayers !== undefined ? item.maxBacktestLayers : item.layersNeededForStress;
+            const riskReasonText = item.riskReason || (item.isDangerous ? `回測最大承接 ${actualLayers} 層 > 預算 ${maxLayers} 層` : `回測最大承接 ${actualLayers} 層 ≤ 預算 ${maxLayers} 層`);
             const riskBadge = item.isDangerous
-                ? `<span class="badge bg-danger-subtle text-danger border border-danger">⚠️ 易擊穿</span>`
-                : `<span class="badge bg-success-subtle text-success border border-success">🛡️ 安全合格</span>`;
+                ? `<span class="badge bg-danger-subtle text-danger border border-danger" title="${riskReasonText}">⚠️ 易擊穿</span>`
+                : `<span class="badge bg-success-subtle text-success border border-success" title="${riskReasonText}">🛡️ 安全合格</span>`;
 
             let badges = [];
             if (isCurrentForm) badges.push('<span class="badge bg-primary">當前回測條件</span>');
@@ -1122,7 +1121,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${item.closedTrades} 筆</td>
                 <td><strong class="text-success">+$${avgProfitStr}</strong></td>
                 <td><span class="fw-bold">-${item.actualAbsorbedDropPct}%</span></td>
-                <td><span class="fw-semibold">${item.layersNeededForStress} 層</span></td>
+                <td><span class="fw-semibold">${actualLayers} 層</span></td>
                 <td>${riskBadge}</td>
                 <td>$${Math.round(item.maxCapitalDeployed).toLocaleString()}</td>
                 <td><button class="btn btn-sm ${isCurrentForm ? 'btn-primary' : (isBest ? 'btn-success' : 'btn-outline-primary')} py-0 px-2 btn-apply-row" data-percent="${item.gridPercent}">套用</button></td>
@@ -1356,15 +1355,18 @@ document.addEventListener('DOMContentLoaded', () => {
         const stressDrop = sum.stressDropPct || (btStressDrop ? btStressDrop.value : 20);
         if (downsideEl) {
             const dsVal = sum.actualAbsorbedDropPct !== undefined ? `-${sum.actualAbsorbedDropPct}%` : (sum.downsideBufferPct !== undefined ? `-${sum.downsideBufferPct}%` : '--');
-            downsideEl.innerText = `${dsVal} (${maxLayers}層承接)`;
+            const actualDropStr = sum.maxPriceDropPct !== undefined ? ` | 回測跌幅 -${sum.maxPriceDropPct}%` : '';
+            downsideEl.innerText = `${dsVal} (${maxLayers}層承接)${actualDropStr}`;
         }
         const missedBuysEl = document.getElementById('res-missed-buys');
         if (missedBuysEl) {
-            const layersNeeded = sum.layersNeededForStress !== undefined ? sum.layersNeededForStress : '--';
+            const actualLayers = sum.maxBacktestLayers !== undefined ? sum.maxBacktestLayers : sum.layersNeededForStress;
+            const actualDrop = sum.maxPriceDropPct !== undefined ? sum.maxPriceDropPct : '--';
             if (sum.isDangerous) {
-                missedBuysEl.innerHTML = `<span class="text-danger fw-bold">⚠️ 易擊穿 (抗${stressDrop}%需${layersNeeded}層 > 預算${maxLayers}層)</span>`;
+                const reason = sum.riskReason || `回測最大承接${actualLayers}層 > 預算${maxLayers}層`;
+                missedBuysEl.innerHTML = `<span class="text-danger fw-bold">⚠️ 易擊穿 (${reason})</span>`;
             } else {
-                missedBuysEl.innerHTML = `<span class="text-success fw-bold">🛡️ 安全合格 (抗${stressDrop}%需${layersNeeded}層 ≤ 預算${maxLayers}層)</span>`;
+                missedBuysEl.innerHTML = `<span class="text-success fw-bold">🛡️ 安全合格 (回測最大承接${actualLayers}層 ≤ 預算${maxLayers}層，最大跌幅${actualDrop}% ≤ ${stressDrop}%)</span>`;
             }
         }
 

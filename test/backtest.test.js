@@ -84,24 +84,25 @@ const assert = require('assert');
     assert.strictEqual(res3Pct.riskRating, 'safe', '風險評級應為 safe');
     assert.ok(res3Pct.layersNeededForStress <= 8, '所需層數應在 8 層預算內');
 
-    // 自訂風控測試：用戶改為 6 層預算，抗 20% 跌幅
-    // 3% 間距需 8 層 > 6 層 -> 判定為危險
-    // 4% 間距需 6 層 <= 6 層 -> 判定為安全
+    // 自訂風控測試：依據回測真實最大下跌層數與最大跌幅評判
+    // 在 sampleKLine 中，最大下跌層數為 4 層
+    // 預算若設為 3 層：4 層 > 3 層 -> 判定為危險
+    // 預算若設為 6 層：4 層 <= 6 層 -> 判定為安全合格
+    const res3Pct_3Layers = runBacktest(sampleKLine, {
+        symbol: '2330',
+        gridPercent: 3.0,
+        maxGridLayers: 3,
+        stressDropPct: 20
+    });
+    assert.strictEqual(res3Pct_3Layers.isDangerous, true, '預算縮小至 3 層時，因回測最大下跌達 4 層 > 3 層，應判定為危險');
+
     const res3Pct_6Layers = runBacktest(sampleKLine, {
         symbol: '2330',
         gridPercent: 3.0,
         maxGridLayers: 6,
         stressDropPct: 20
     });
-    assert.strictEqual(res3Pct_6Layers.isDangerous, true, '預算縮小至 6 層時，3% 間距應判定為危險');
-
-    const res4Pct_6Layers = runBacktest(sampleKLine, {
-        symbol: '2330',
-        gridPercent: 4.0,
-        maxGridLayers: 6,
-        stressDropPct: 20
-    });
-    assert.strictEqual(res4Pct_6Layers.isDangerous, false, '預算 6 層時，4% 間距可扛住 20% 跌幅，應判定為安全合格');
+    assert.strictEqual(res3Pct_6Layers.isDangerous, false, '預算 6 層時，回測最大下跌 4 層 <= 6 層且跌幅未超過 20%，應判定為安全合格');
 
     console.log('--- 測試 4: 實盤資金不足斷糧停擺 (Missed Buys) ---');
     const lowCashOpts = {
@@ -246,7 +247,7 @@ const assert = require('assert');
     // 模擬 00891 實盤情境：起始價 33.35，區間下限 28.0 (跌幅 16.0%)，預算 8 層，預防波段跌幅 36%
     const mockKLineForFloor = [
         { date: '2026-07-17', high: 33.5, low: 33.0, close: 33.35 },
-        { date: '2026-07-18', high: 33.2, low: 32.0, close: 32.5 }
+        { date: '2026-07-18', high: 33.2, low: 28.0, close: 28.0 }
     ];
 
     // 2% 間距：至 28.0 僅需 8 層買單即可覆蓋，策略在 28.0 以下停止承接，因此 8 層預算足以防禦整個買入區間 -> safe
@@ -280,7 +281,38 @@ const assert = require('assert');
     assert.strictEqual(resFloor1Pct.isDangerous, true, '8 層預算不足以承受 17 層，應判定為易擊穿');
     assert.strictEqual(resFloor1Pct.riskRating, 'danger', '風險評級應為 danger');
 
-    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 20%波段防禦 + 標的自訂風控條件 (含實盤區間下限真實對齊) + 排除原始庫存本金公式」單測全部通過！');
+    console.log('--- 測試 10: 回測整個過程真實風控評判（最大承接層數超過預算 或 最大跌幅超過預防跌幅）---');
+    // 情境 A: 最大下跌層數超過預算 (如 13 層 > 10 層) -> 易擊穿
+    // 情境 B: 最大下跌層數未超過預算 (如 9 層 <= 10 層) 且波段跌幅未超過 35% -> 安全合格
+    const klineWave = [
+        { date: '2026-01-01', high: 1.35, low: 1.30, close: 1.35 },
+        { date: '2026-01-02', high: 1.35, low: 1.03, close: 1.05 } // 跌幅 ~23.7%
+    ];
+    // 2% 間距：1.35 跌到 1.03 跨越 13 層 > 10 層預算 -> danger
+    const resWave2Pct = runBacktest(klineWave, {
+        symbol: '159338',
+        gridPercent: 2.0,
+        maxGridLayers: 10,
+        stressDropPct: 35.0,
+        lowerPrice: 0.85,
+        upperPrice: 1.35
+    });
+    assert.strictEqual(resWave2Pct.isDangerous, true, '2% 間距回測最大下跌超過預算 10 層，應判定為易擊穿');
+    assert.ok(resWave2Pct.maxBacktestLayers >= 13, '2% 間距回測下跌層數應 >= 13 層');
+
+    // 3% 間距：1.35 跌到 1.03 跨越 9 層 <= 10 層預算，且跌幅 23.7% <= 35% -> safe
+    const resWave3Pct = runBacktest(klineWave, {
+        symbol: '159338',
+        gridPercent: 3.0,
+        maxGridLayers: 10,
+        stressDropPct: 35.0,
+        lowerPrice: 0.85,
+        upperPrice: 1.35
+    });
+    assert.strictEqual(resWave3Pct.isDangerous, false, '3% 間距回測最大下跌 9 層 <= 10 層且跌幅未超 35%，應判定為安全合格');
+    assert.strictEqual(resWave3Pct.maxBacktestLayers, 9, '3% 間距回測下跌層數應為 9 層');
+
+    console.log('✅ 所有繁體中文新版蛛網交易「疊層預算 + 回測過程真實風控評判 (層數與跌幅雙門檻) + 標的自訂風控條件 + 排除原始庫存本金公式」單測全部通過！');
 })().catch(err => {
     console.error('測試失敗:', err);
     process.exit(1);
